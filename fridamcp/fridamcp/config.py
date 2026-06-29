@@ -25,6 +25,28 @@ class Config:
     # MCP 服务器路径
     MCP_PATH: str = "/mcp"
 
+    # ===== 持久性与可靠性配置 =====
+    # 设备重连最大重试次数
+    DEVICE_RECONNECT_MAX_RETRIES: int = field(
+        default_factory=lambda: int(os.getenv("FRIDAMCP_RECONNECT_RETRIES", "5"))
+    )
+    # 设备重连间隔（秒）
+    DEVICE_RECONNECT_INTERVAL: float = field(
+        default_factory=lambda: float(os.getenv("FRIDAMCP_RECONNECT_INTERVAL", "2.0"))
+    )
+    # 会话保活检查间隔（秒，0 表示禁用）
+    SESSION_KEEPALIVE_INTERVAL: float = field(
+        default_factory=lambda: float(os.getenv("FRIDAMCP_KEEPALIVE_INTERVAL", "30.0"))
+    )
+    # 优雅关闭超时（秒）
+    GRACEFUL_SHUTDOWN_TIMEOUT: float = field(
+        default_factory=lambda: float(os.getenv("FRIDAMCP_SHUTDOWN_TIMEOUT", "10.0"))
+    )
+    # 服务器自动重启最大次数（0 表示不自动重启）
+    SERVER_AUTO_RESTART_MAX: int = field(
+        default_factory=lambda: int(os.getenv("FRIDAMCP_AUTO_RESTART_MAX", "3"))
+    )
+
     # ===== Frida 配置 =====
     # 设备类型: usb / remote / local
     FRIDA_DEVICE_TYPE: str = field(

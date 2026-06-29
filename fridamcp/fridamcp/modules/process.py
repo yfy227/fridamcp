@@ -7,6 +7,7 @@
 from typing import Dict, Any, List, Optional
 
 from ..core.frida_client import frida_client
+from ..config import config
 from ..utils.logger import logger
 
 
@@ -182,6 +183,74 @@ def register_tools(mcp):
             return {"success": success, "session_id": session_id}
         except Exception as e:
             logger.error(f"close_session failed: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def close_all_sessions() -> Dict[str, Any]:
+        """关闭所有活跃会话
+
+        用于清理资源或重置状态。会关闭所有 Frida 会话并卸载脚本。
+
+        Returns:
+            操作结果，包含关闭的会话数量
+        """
+        try:
+            from ..core.session_manager import session_manager
+            count = len(session_manager.list_sessions())
+            session_manager.close_all()
+            return {"success": True, "closed_count": count}
+        except Exception as e:
+            logger.error(f"close_all_sessions failed: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def get_system_status() -> Dict[str, Any]:
+        """获取系统整体状态
+
+        返回设备连接状态、会话状态、服务器运行时间等信息。
+        用于诊断和监控。
+
+        Returns:
+            系统状态字典
+        """
+        try:
+            from ..core.session_manager import session_manager
+            from ..core.device_manager import device_manager
+            return {
+                "device": device_manager.get_status(),
+                "sessions": session_manager.get_status(),
+                "server_info": {
+                    "name": "FridaMCP",
+                    "version": "1.0.0",
+                    "port": config.MCP_PORT,
+                },
+            }
+        except Exception as e:
+            logger.error(f"get_system_status failed: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def reconnect_device() -> Dict[str, Any]:
+        """重新连接 Frida 设备
+
+        当设备连接断开或异常时，强制重新连接。
+
+        Returns:
+            操作结果
+        """
+        try:
+            from ..core.device_manager import device_manager
+            device = device_manager.refresh()
+            return {
+                "success": True,
+                "device": {
+                    "id": device.id,
+                    "name": device.name,
+                    "type": device.type,
+                },
+            }
+        except Exception as e:
+            logger.error(f"reconnect_device failed: {e}")
             return {"error": str(e)}
 
     logger.info("Process module tools registered")
