@@ -37,10 +37,11 @@
 
 ## 核心特性
 
-- **8 个 MCP 模块**：进程管理、Hook 管理、内存检查、网络监控、文件系统、UI 自动化、加密分析、日志捕获
+- **9 个 MCP 模块**：进程管理、Hook 管理、内存检查、网络监控、文件系统、UI 自动化、加密分析、日志捕获、**自定义脚本执行**
+- **直接运行 Frida JS 脚本**：AI 可通过 `run_script` 工具直接编写并执行任意 Frida JavaScript，不再局限于预置模板
 - **APK 注入器**：自动将 `frida-gadget` 注入 APK，支持非 root 设备
 - **多设备支持**：支持 USB 设备、远程设备、模拟器
-- **脚本管理**：内置常用 Frida 脚本模板，支持自定义脚本
+- **脚本管理**：内置常用 Frida 脚本模板，支持自定义脚本、RPC 调用、文件加载
 - **实时日志**：捕获 Frida 脚本输出和应用日志
 - **AI 友好**：所有工具都设计为 AI 易于调用，参数清晰，返回结构化数据
 
@@ -127,13 +128,14 @@ bash scripts/run.sh
 | 模块 | 说明 | 主要工具 |
 |------|------|----------|
 | **process** | 进程管理 | `list_processes`, `spawn_app`, `attach_process`, `kill_process`, `resume_process` |
-| **hook** | Hook 管理 | `hook_method`, `hook_native`, `unhook_all`, `list_hooks`, `trace_method` |
+| **hook** | Hook 管理 | `hook_method`, `hook_native`, `unhook`, `list_hooks`, `trace_method` |
 | **memory** | 内存检查 | `read_memory`, `write_memory`, `search_memory`, `list_modules`, `list_exports` |
 | **network** | 网络监控 | `start_capture`, `stop_capture`, `get_capture`, `hook_ssl` |
 | **filesystem** | 文件系统 | `list_files`, `read_file`, `pull_file`, `push_file` |
 | **ui_automation** | UI 自动化 | `tap`, `input_text`, `screenshot`, `list_ui` |
 | **crypto** | 加密分析 | `hook_crypto`, `dump_keys`, `hook_ssl_keys` |
-| **log** | 日志捕获 | `start_log`, `get_logs`, `clear_logs` |
+| **log** | 日志捕获 | `start_log`, `get_logs`, `clear_all_logs` |
+| **script** | **自定义脚本执行** | `run_script`, `call_script_rpc`, `unload_script`, `list_scripts`, `load_script_file`, `get_script_messages` |
 
 详细文档请参考 [docs/MODULES.md](docs/MODULES.md)。
 
@@ -157,7 +159,8 @@ fridamcp/
 │   │   ├── filesystem.py      # 文件系统
 │   │   ├── ui_automation.py   # UI 自动化
 │   │   ├── crypto.py          # 加密分析
-│   │   └── log.py             # 日志捕获
+│   │   ├── log.py             # 日志捕获
+│   │   └── script.py          # 自定义脚本执行（核心）
 │   └── utils/                 # 工具
 │       ├── apk_injector.py    # APK 注入逻辑
 │       └── logger.py          # 日志工具
@@ -221,6 +224,50 @@ FridaMCP:
 1. [process] attach_process("com.example.app")
 2. [memory] search_memory("password") → 返回所有匹配地址
 3. [memory] read_memory(address, 64) → 读取上下文
+```
+
+### 示例 4：直接运行 Frida JS 脚本（核心功能）
+
+```
+AI: 请帮我 Hook 所有 SharedPreferences 的 putString 调用，打印键值。
+
+FridaMCP:
+1. [process] attach_process("com.example.app")
+2. [script] run_script(session_id, '''
+   Java.perform(function() {
+       var SharedPreferencesEditor = Java.use("android.app.SharedPreferencesImpl$EditorImpl");
+       SharedPreferencesEditor.putString.implementation = function(key, value) {
+           send({ type: "putString", key: key, value: value });
+           return this.putString(key, value);
+       };
+       send({ type: "hook_ready" });
+   });
+   ''')
+3. [script] get_script_messages(session_id) → 返回 Hook 捕获的数据
+4. [script] unload_script(session_id, script_id) → 卸载脚本
+```
+
+### 示例 5：使用 RPC 导出执行复杂操作
+
+```
+AI: 编写一个脚本，导出 decrypt 函数让我调用。
+
+FridaMCP:
+1. [process] attach_process("com.example.app")
+2. [script] run_script(session_id, '''
+   rpc.exports = {
+       decrypt: function(encrypted) {
+           var result = null;
+           Java.perform(function() {
+               var Crypto = Java.use("com.example.app.Crypto");
+               result = Crypto.decrypt(encrypted);
+           });
+           return result;
+       }
+   };
+   ''')
+3. [script] call_script_rpc(session_id, script_id, "decrypt", ["base64data..."])
+   → 返回解密结果
 ```
 
 ## 配置

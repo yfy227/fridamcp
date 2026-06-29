@@ -5,7 +5,7 @@ FridaMCP - AI-Powered Frida MCP Server for Android
 进行动态分析、Hook、内存检查、网络监控等操作。
 """
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 __author__ = "yfy227"
 __license__ = "MIT"
 

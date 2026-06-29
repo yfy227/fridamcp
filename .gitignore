@@ -1,2 +1,15 @@
 skills/
 node_modules/
+.env
+.env.*
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+*.apk
+*.so
+frida-gadget*

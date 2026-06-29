@@ -2,9 +2,12 @@
 FridaMCP 服务器入口
 
 启动 MCP 服务器，监听端口 8768，注册所有 MCP 模块。
+支持优雅关闭、自动重启和健康检查。
 """
 
 import sys
+import os
+import signal
 import asyncio
 import argparse
 from typing import Optional
@@ -12,6 +15,12 @@ from typing import Optional
 from .config import config
 from .utils.logger import setup_logging, logger
 from .modules import ALL_MODULES
+from .core.session_manager import session_manager
+from .core.device_manager import device_manager
+
+
+# 全局关闭事件
+_shutdown_event: Optional[asyncio.Event] = None
 
 
 def create_mcp_server():
@@ -27,7 +36,6 @@ def create_mcp_server():
             logger.error("mcp package not installed. Run: pip install mcp")
             sys.exit(1)
 
-    # 创建 FastMCP 服务器
     mcp = FastMCP(
         name="FridaMCP",
         instructions=(
@@ -39,34 +47,83 @@ def create_mcp_server():
     )
 
     # 注册所有模块的工具
+    registered_modules = []
     for module in ALL_MODULES:
         try:
             module.register_tools(mcp)
+            registered_modules.append(module.__name__.split(".")[-1])
             logger.info(f"Module registered: {module.__name__}")
         except Exception as e:
             logger.error(f"Failed to register module {module.__name__}: {e}")
 
-    # 注册一个 ping 工具用于健康检查
+    # 注册健康检查工具
     @mcp.tool()
     def ping() -> str:
         """健康检查工具，返回 pong"""
         return "pong"
 
-    # 注册服务器信息工具
     @mcp.tool()
     def server_info() -> dict:
         """获取 MCP 服务器信息
 
-        返回服务器版本、监听端口、已注册模块等信息。
+        返回服务器版本、监听端口、已注册模块、设备状态、会话状态等信息。
         """
         return {
             "name": "FridaMCP",
             "version": "1.0.0",
             "port": config.MCP_PORT,
             "host": config.MCP_HOST,
-            "modules": [m.__name__.split(".")[-1] for m in ALL_MODULES],
-            "device_type": config.FRIDA_DEVICE_TYPE,
+            "modules": registered_modules,
+            "device": device_manager.get_status(),
+            "sessions": session_manager.get_status(),
         }
+
+    @mcp.tool()
+    def health_check() -> dict:
+        """全面健康检查
+
+        检查服务器、设备连接、会话状态等，返回详细健康报告。
+        """
+        device_connected = device_manager.is_connected()
+        session_status = session_manager.get_status()
+
+        all_healthy = device_connected or not session_status["active_sessions"]
+
+        return {
+            "healthy": all_healthy,
+            "server": {
+                "running": True,
+                "port": config.MCP_PORT,
+            },
+            "device": {
+                "connected": device_connected,
+                "status": device_manager.get_status(),
+            },
+            "sessions": session_status,
+        }
+
+    @mcp.tool()
+    def cleanup_sessions() -> dict:
+        """清理已分离的会话
+
+        移除所有处于 DETACHED 或 ERROR 状态的会话，释放资源。
+
+        Returns:
+            操作结果，包含清理的会话数量
+        """
+        try:
+            before = len(session_manager.list_sessions())
+            session_manager._cleanup_detached()
+            after = len(session_manager.list_sessions())
+            cleaned = before - after
+            return {
+                "success": True,
+                "cleaned_count": cleaned,
+                "remaining_count": after,
+            }
+        except Exception as e:
+            logger.error(f"cleanup_sessions failed: {e}")
+            return {"error": str(e)}
 
     return mcp
 
@@ -74,7 +131,6 @@ def create_mcp_server():
 def _create_basic_server():
     """创建基础 MCP 服务器（当 FastMCP 不可用时）"""
     from mcp.server import Server
-    from mcp.server.stdio import stdio_server
 
     server = Server("FridaMCP")
 
@@ -113,34 +169,81 @@ def _create_basic_server():
     return server
 
 
+def _signal_handler(signum, frame):
+    """信号处理器，用于优雅关闭"""
+    sig_name = signal.Signals(signum).name
+    logger.info(f"Received signal {sig_name}, initiating graceful shutdown...")
+    if _shutdown_event:
+        _shutdown_event.set()
+
+
+def _setup_signal_handlers():
+    """设置信号处理器"""
+    signal.signal(signal.SIGINT, _signal_handler)
+    signal.signal(signal.SIGTERM, _signal_handler)
+
+
 async def run_sse_server(mcp, host: str, port: int):
-    """以 SSE 模式运行 MCP 服务器"""
-    try:
-        # FastMCP 的 SSE 模式
-        if hasattr(mcp, "run_sse_async"):
-            await mcp.run_sse_async(host=host, port=port)
-        elif hasattr(mcp, "sse_app"):
-            # 使用 ASGI 应用
-            import uvicorn
-            app = mcp.sse_app()
-            config_uv = uvicorn.Config(
-                app,
-                host=host,
-                port=port,
-                log_level="info",
+    """以 SSE 模式运行 MCP 服务器（带自动重启）"""
+    global _shutdown_event
+    _shutdown_event = asyncio.Event()
+    _setup_signal_handlers()
+
+    restart_count = 0
+    max_restarts = config.SERVER_AUTO_RESTART_MAX
+
+    while not _shutdown_event.is_set():
+        try:
+            if hasattr(mcp, "run_sse_async"):
+                logger.info(f"Starting SSE server on {host}:{port}")
+                await mcp.run_sse_async(host=host, port=port)
+            elif hasattr(mcp, "sse_app"):
+                import uvicorn
+                app = mcp.sse_app()
+                config_uv = uvicorn.Config(
+                    app,
+                    host=host,
+                    port=port,
+                    log_level="info",
+                )
+                server = uvicorn.Server(config_uv)
+                # 关联关闭事件
+                server.install_signal_handlers = lambda: None
+                await server.serve()
+            else:
+                logger.error("SSE mode not supported by this MCP version")
+                sys.exit(1)
+            break  # 正常退出
+
+        except asyncio.CancelledError:
+            logger.info("Server task cancelled")
+            break
+        except Exception as e:
+            if _shutdown_event.is_set():
+                break
+            restart_count += 1
+            if restart_count > max_restarts:
+                logger.error(
+                    f"Server exceeded max restarts ({max_restarts}), giving up: {e}"
+                )
+                raise
+            logger.error(
+                f"Server error (restart {restart_count}/{max_restarts}): {e}"
             )
-            server = uvicorn.Server(config_uv)
-            await server.serve()
-        else:
-            logger.error("SSE mode not supported by this MCP version")
-            sys.exit(1)
-    except Exception as e:
-        logger.error(f"SSE server error: {e}")
-        raise
+            await asyncio.sleep(2)
+
+    # 优雅关闭：清理所有会话
+    logger.info("Cleaning up sessions...")
+    session_manager.close_all()
+    logger.info("Server shutdown complete")
 
 
 async def run_streamable_http_server(mcp, host: str, port: int):
     """以 Streamable HTTP 模式运行 MCP 服务器"""
+    global _shutdown_event
+    _shutdown_event = asyncio.Event()
+    _setup_signal_handlers()
+
     try:
         if hasattr(mcp, "streamable_http_app"):
             import uvicorn
@@ -152,27 +255,42 @@ async def run_streamable_http_server(mcp, host: str, port: int):
                 log_level="info",
             )
             server = uvicorn.Server(config_uv)
+            server.install_signal_handlers = lambda: None
             await server.serve()
         else:
-            # 回退到 SSE
             logger.warning("Streamable HTTP not available, falling back to SSE")
             await run_sse_server(mcp, host, port)
+    except asyncio.CancelledError:
+        logger.info("Server task cancelled")
     except Exception as e:
         logger.error(f"HTTP server error: {e}")
         raise
+    finally:
+        logger.info("Cleaning up sessions...")
+        session_manager.close_all()
+        logger.info("Server shutdown complete")
 
 
 def run_stdio_server(mcp):
     """以 stdio 模式运行 MCP 服务器"""
-    if hasattr(mcp, "run"):
-        mcp.run()
-    else:
-        logger.error("stdio mode not supported")
-        sys.exit(1)
+    _setup_signal_handlers()
+    try:
+        if hasattr(mcp, "run"):
+            mcp.run()
+        else:
+            logger.error("stdio mode not supported")
+            sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    finally:
+        session_manager.close_all()
+        logger.info("Server shutdown complete")
 
 
 def main():
     """主入口函数"""
+    global _shutdown_event
+
     parser = argparse.ArgumentParser(
         description="FridaMCP - AI-Powered Frida MCP Server for Android"
     )
@@ -209,21 +327,23 @@ def main():
         default=None,
         help="Frida device ID",
     )
+    parser.add_argument(
+        "--no-auto-restart",
+        action="store_true",
+        help="Disable server auto-restart on crash",
+    )
 
     args = parser.parse_args()
 
-    # 更新配置
-    import os
-    os.environ["FRIDAMCP_HOST"] = args.host
-    os.environ["FRIDAMCP_PORT"] = str(args.port)
-    os.environ["FRIDA_DEVICE_TYPE"] = args.device_type
-    if args.device_id:
-        os.environ["FRIDA_DEVICE_ID"] = args.device_id
-
-    # 重新加载配置
-    from importlib import reload
-    from . import config as config_module
-    reload(config_module)
+    # 就地更新配置单例（其他模块已持有同一引用，会立即生效）
+    config.update(
+        MCP_HOST=args.host,
+        MCP_PORT=args.port,
+        LOG_LEVEL=args.log_level,
+        FRIDA_DEVICE_TYPE=args.device_type,
+        FRIDA_DEVICE_ID=args.device_id,
+        SERVER_AUTO_RESTART_MAX=0 if args.no_auto_restart else None,
+    )
 
     # 初始化日志
     setup_logging()
@@ -237,6 +357,7 @@ def main():
     logger.info(f"Device type: {args.device_type}")
     if args.device_id:
         logger.info(f"Device ID: {args.device_id}")
+    logger.info(f"Auto-restart: {'disabled' if args.no_auto_restart else 'enabled'}")
     logger.info("=" * 60)
 
     # 创建 MCP 服务器

@@ -27,6 +27,3 @@ loguru>=0.7.0
 
 # HTTP client (for remote devices)
 httpx>=0.25.0
-
-# Async support
-asyncio-extra>=40.0.0

@@ -34,11 +34,16 @@ class FridaClient:
 
     # ============ 进程管理 ============
 
-    def list_processes(self) -> List[Dict[str, Any]]:
-        """列出设备上所有进程"""
+    def _get_device(self):
+        """获取当前设备，如果不可用则尝试获取"""
         device = device_manager.get_current_device()
         if device is None:
             device = device_manager.get_device()
+        return device
+
+    def list_processes(self) -> List[Dict[str, Any]]:
+        """列出设备上所有进程"""
+        device = self._get_device()
         try:
             procs = device.enumerate_processes()
             return [{"pid": p.pid, "name": p.name} for p in procs]
@@ -48,9 +53,7 @@ class FridaClient:
 
     def list_applications(self) -> List[Dict[str, Any]]:
         """列出设备上所有已安装应用"""
-        device = device_manager.get_current_device()
-        if device is None:
-            device = device_manager.get_device()
+        device = self._get_device()
         try:
             apps = device.enumerate_applications()
             return [
@@ -75,9 +78,7 @@ class FridaClient:
         Returns:
             包含 pid 和 session_id 的字典
         """
-        device = device_manager.get_current_device()
-        if device is None:
-            device = device_manager.get_device()
+        device = self._get_device()
 
         logger.info(f"Spawning {package} (paused={paused})")
         pid = device.spawn([package])
@@ -98,9 +99,7 @@ class FridaClient:
         Returns:
             包含 session_id 的字典
         """
-        device = device_manager.get_current_device()
-        if device is None:
-            device = device_manager.get_device()
+        device = self._get_device()
 
         if isinstance(target, int):
             pid = target

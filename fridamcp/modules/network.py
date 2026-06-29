@@ -146,8 +146,23 @@ SOCKET_HOOK_TEMPLATE = """
     var recv_fn = Module.findExportByName(null, "recv");
     if (recv_fn) {
         Interceptor.attach(recv_fn, {
+            onEnter: function(args) {
+                this.buf = args[1];
+                this.len = args[2].toInt32();
+            },
             onLeave: function(retval) {
-                // 数据在 onEnter 中无法获取，需要在此处读取
+                var n = retval.toInt32();
+                if (n > 0 && n <= this.len) {
+                    try {
+                        var data = Memory.readUtf8String(this.buf, Math.min(n, 4096));
+                        send({
+                            type: "socket_recv",
+                            hookId: hookId,
+                            size: n,
+                            data: data
+                        });
+                    } catch(e) {}
+                }
             }
         });
     }

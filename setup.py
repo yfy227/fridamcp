@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="fridamcp",
-    version="1.0.0",
+    version="1.1.0",
     author="yfy227",
     author_email="yfy227@users.noreply.github.com",
     description="AI-Powered Frida MCP Server for Android - 在 Android 上运行 Frida 并通过 MCP 协议让 AI 便捷使用",

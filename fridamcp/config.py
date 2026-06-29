@@ -25,6 +25,28 @@ class Config:
     # MCP 服务器路径
     MCP_PATH: str = "/mcp"
 
+    # ===== 持久性与可靠性配置 =====
+    # 设备重连最大重试次数
+    DEVICE_RECONNECT_MAX_RETRIES: int = field(
+        default_factory=lambda: int(os.getenv("FRIDAMCP_RECONNECT_RETRIES", "5"))
+    )
+    # 设备重连间隔（秒）
+    DEVICE_RECONNECT_INTERVAL: float = field(
+        default_factory=lambda: float(os.getenv("FRIDAMCP_RECONNECT_INTERVAL", "2.0"))
+    )
+    # 会话保活检查间隔（秒，0 表示禁用）
+    SESSION_KEEPALIVE_INTERVAL: float = field(
+        default_factory=lambda: float(os.getenv("FRIDAMCP_KEEPALIVE_INTERVAL", "30.0"))
+    )
+    # 优雅关闭超时（秒）
+    GRACEFUL_SHUTDOWN_TIMEOUT: float = field(
+        default_factory=lambda: float(os.getenv("FRIDAMCP_SHUTDOWN_TIMEOUT", "10.0"))
+    )
+    # 服务器自动重启最大次数（0 表示不自动重启）
+    SERVER_AUTO_RESTART_MAX: int = field(
+        default_factory=lambda: int(os.getenv("FRIDAMCP_AUTO_RESTART_MAX", "3"))
+    )
+
     # ===== Frida 配置 =====
     # 设备类型: usb / remote / local
     FRIDA_DEVICE_TYPE: str = field(
@@ -70,7 +92,7 @@ class Config:
         default_factory=lambda: os.getenv(
             "FRIDAMCP_GADGET_DIR",
             os.path.join(
-                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                os.path.dirname(os.path.dirname(__file__)),
                 "injector",
                 "frida_gadget",
             ),
@@ -110,6 +132,15 @@ class Config:
             return self.FRIDA_DEVICE_ID
         else:
             return self.FRIDA_DEVICE_TYPE
+
+    def update(self, **kwargs):
+        """就地更新配置项（供 CLI 参数覆盖使用）
+
+        仅更新非 None 的值，避免覆盖环境变量默认值。
+        """
+        for key, value in kwargs.items():
+            if value is not None and hasattr(self, key):
+                setattr(self, key, value)
 
 
 # 全局配置单例
