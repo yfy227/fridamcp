@@ -7,6 +7,8 @@ FridaMCP APK 注入器
 
 用法:
     python inject_apk.py <input.apk> [output.apk] [--arch arm64-v8a] [--use-apktool]
+    python inject_apk.py app.apk --use-apktool --v2-sign --v3-sign
+    python inject_apk.py app.apk --check-packer
 """
 
 import sys
@@ -21,6 +23,7 @@ from fridamcp.utils.apk_injector import (
     inject_gadget,
     inject_with_apktool,
     detect_apk_arch,
+    detect_packer,
     GADGET_CONFIG_TEMPLATE,
 )
 from fridamcp.utils.logger import setup_logging, logger
@@ -54,6 +57,26 @@ def main():
         help="不签名 APK",
     )
     parser.add_argument(
+        "--no-v2-sign",
+        action="store_true",
+        help="禁用 v2 签名方案（默认启用）",
+    )
+    parser.add_argument(
+        "--no-v3-sign",
+        action="store_true",
+        help="禁用 v3 签名方案（默认启用）",
+    )
+    parser.add_argument(
+        "--skip-packer-check",
+        action="store_true",
+        help="跳过加固检测",
+    )
+    parser.add_argument(
+        "--check-packer",
+        action="store_true",
+        help="仅检测加固，不注入",
+    )
+    parser.add_argument(
         "--application-class",
         help="自定义 Application 类名（仅 apktool 模式）",
     )
@@ -79,6 +102,15 @@ def main():
     # 初始化日志
     setup_logging()
 
+    # 仅检测加固模式
+    if args.check_packer:
+        logger.info("=" * 60)
+        logger.info("FridaMCP Packer Detection")
+        logger.info("=" * 60)
+        result = detect_packer(args.input_apk)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+        return
+
     # 设置输出路径
     output_apk = args.output_apk
     if not output_apk:
@@ -94,6 +126,9 @@ def main():
     gadget_config["interaction"]["address"] = args.gadget_host
     gadget_config["interaction"]["port"] = args.gadget_port
 
+    v2_signing = not args.no_v2_sign
+    v3_signing = not args.no_v3_sign
+
     logger.info("=" * 60)
     logger.info("FridaMCP APK Injector")
     logger.info("=" * 60)
@@ -102,6 +137,9 @@ def main():
     logger.info(f"Arch:   {args.arch or 'auto'}")
     logger.info(f"Mode:   {'apktool' if args.use_apktool else 'simple'}")
     logger.info(f"Sign:   {not args.no_sign}")
+    logger.info(f"V2 Sign: {v2_signing}")
+    logger.info(f"V3 Sign: {v3_signing}")
+    logger.info(f"Packer check: {not args.skip_packer_check}")
     logger.info("=" * 60)
 
     # 执行注入
@@ -111,6 +149,9 @@ def main():
             output_apk,
             arch=args.arch,
             application_class=args.application_class,
+            v2_signing=v2_signing,
+            v3_signing=v3_signing,
+            skip_packer_check=args.skip_packer_check,
         )
     else:
         result = inject_gadget(
@@ -119,6 +160,9 @@ def main():
             arch=args.arch,
             gadget_config=gadget_config,
             sign=not args.no_sign,
+            v2_signing=v2_signing,
+            v3_signing=v3_signing,
+            skip_packer_check=args.skip_packer_check,
         )
 
     # 输出结果
@@ -127,10 +171,24 @@ def main():
         logger.info("✓ Injection succeeded!")
         print(f"\nOutput APK: {result.get('output_apk', output_apk)}")
         print(f"Architectures: {result.get('archs', [])}")
+        if result.get("missing_archs"):
+            print(f"Missing gadgets for: {result['missing_archs']}")
         if result.get("application_class"):
             print(f"Application class: {result['application_class']}")
         if result.get("sign_method"):
             print(f"Sign method: {result['sign_method']}")
+        if result.get("sign_schemes"):
+            print(f"Sign schemes: {', '.join(result['sign_schemes'])}")
+        if result.get("aligned"):
+            print("Zipaligned: yes")
+        # 加固检测结果
+        packer_info = result.get("packer_info")
+        if packer_info:
+            if packer_info["is_packed"]:
+                print(f"\n⚠ Packer detected: {packer_info['packer_name']}")
+                print(f"  {packer_info['recommendation']}")
+            else:
+                print("Packer: not detected")
         print("\n下一步:")
         print(f"  1. 安装注入后的 APK: adb install {output_apk}")
         print("  2. 启动应用（frida-gadget 会自动加载）")

@@ -38,6 +38,16 @@ class Config:
     SESSION_KEEPALIVE_INTERVAL: float = field(
         default_factory=lambda: float(os.getenv("FRIDAMCP_KEEPALIVE_INTERVAL", "30.0"))
     )
+    # 会话空闲超时（秒，0 表示永不超时）
+    # 空闲超过此值的会话会被保活线程自动分离回收
+    SESSION_IDLE_TIMEOUT: float = field(
+        default_factory=lambda: float(os.getenv("FRIDAMCP_SESSION_IDLE_TIMEOUT", "600.0"))
+    )
+    # 会话操作锁获取超时（秒，0 表示阻塞等待）
+    # 防止多 AI 并发调用同一会话时无限等待
+    SESSION_LOCK_TIMEOUT: float = field(
+        default_factory=lambda: float(os.getenv("FRIDAMCP_SESSION_LOCK_TIMEOUT", "30.0"))
+    )
     # 优雅关闭超时（秒）
     GRACEFUL_SHUTDOWN_TIMEOUT: float = field(
         default_factory=lambda: float(os.getenv("FRIDAMCP_SHUTDOWN_TIMEOUT", "10.0"))
@@ -45,6 +55,15 @@ class Config:
     # 服务器自动重启最大次数（0 表示不自动重启）
     SERVER_AUTO_RESTART_MAX: int = field(
         default_factory=lambda: int(os.getenv("FRIDAMCP_AUTO_RESTART_MAX", "3"))
+    )
+
+    # ===== MCP 传输层配置 =====
+    # 传输方式: stdio / sse / streamable_http
+    # stdio: 本地工具标准方式（Claude Desktop / Cursor 推荐），延迟最低
+    # sse: 远程调用，Server-Sent Events
+    # streamable_http: 远程调用，HTTP 流式传输
+    MCP_TRANSPORT: str = field(
+        default_factory=lambda: os.getenv("FRIDAMCP_TRANSPORT", "stdio")
     )
 
     # ===== Frida 配置 =====

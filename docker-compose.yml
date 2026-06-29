@@ -1,0 +1,36 @@
+# FridaMCP Docker Compose
+# Quick start for remote deployment
+#
+# Usage:
+#   docker compose up -d           # Start in HTTP mode
+#   docker compose logs -f         # View logs
+#   docker compose down            # Stop
+
+version: "3.8"
+
+services:
+  fridamcp:
+    build: .
+    image: fridamcp:latest
+    container_name: fridamcp
+    restart: unless-stopped
+    command: ["-t", "http", "-p", "8768", "--host", "0.0.0.0"]
+    ports:
+      - "8768:8768"
+    volumes:
+      # Mount ADB device (for USB-connected Android devices)
+      - /dev/bus/usb:/dev/bus/usb
+      # Mount workspace for APK injection output
+      - ./workspace:/app/workspace
+    privileged: true  # Required for ADB device access
+    environment:
+      - FRIDAMCP_LOG_LEVEL=INFO
+      - FRIDAMCP_TRANSPORT=http
+      - FRIDAMCP_SESSION_IDLE_TIMEOUT=600
+      - FRIDAMCP_KEEPALIVE_INTERVAL=30
+    networks:
+      - fridamcp-net
+
+networks:
+  fridamcp-net:
+    driver: bridge

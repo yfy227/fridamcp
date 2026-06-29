@@ -3,6 +3,7 @@
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Protocol-green.svg)](https://modelcontextprotocol.io/)
 [![Frida](https://img.shields.io/badge/Frida-16+-orange.svg)](https://frida.re/)
+[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)]()
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 > 在 Android 设备上运行 Frida，并通过 MCP (Model Context Protocol) 服务让 AI 更加便捷地使用 Frida 进行动态分析、Hook、内存检查、网络监控等操作。
@@ -12,38 +13,49 @@
 **FridaMCP** 是一个将 Frida 动态插桩工具与 MCP 协议结合的项目，专为 AI 辅助的 Android 应用安全分析而设计。它包含三个核心组件：
 
 1. **Android 端 Frida 运行器** —— 在 Android 设备上启动 `frida-server`，提供 Frida 运行环境。
-2. **APK 注入器** —— 将 `frida-gadget` 自动注入到目标 APK 中，使目标应用启动时自动加载 Frida，无需 root 也能使用。
-3. **MCP 服务器** —— 监听端口 `8768`，向 AI 客户端暴露一系列 Frida 操作工具，让 AI 可以直接调用 Frida 进行安全分析。
+2. **APK 注入器** —— 将 `frida-gadget` 自动注入到目标 APK 中，使目标应用启动时自动加载 Frida，无需 root 也能使用。支持 v1/v2/v3 签名方案、多 ABI 自动检测、加固 APK 检测。
+3. **MCP 服务器** —— 通过 stdio（本地，默认）或 HTTP/SSE（远程）向 AI 客户端暴露一系列 Frida 操作工具，让 AI 可以直接调用 Frida 进行安全分析。
 
 ## 工作流程
 
 ```
 ┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
 │  AI Client  │◄───►│  MCP Server      │◄───►│  Android Device │
-│ (Claude等)  │ MCP │  (Port 8768)     │ USB │  + Frida Server │
+│ (Claude等)  │ MCP │  (stdio/HTTP/SSE)│ USB │  + Frida Server │
 └─────────────┘     └──────────────────┘     └─────────────────┘
                             │                          │
                             │                          ▼
                     ┌───────────────┐          ┌────────────────┐
                     │  MCP Modules  │          │  Target App    │
-                    │  (8 modules)  │          │  (Injected)    │
+                    │  (9 modules)  │          │  (Injected)    │
                     └───────────────┘          └────────────────┘
+                            │
+                    ┌───────────────┐
+                    │  Session Mgr  │  ← 生命周期管理
+                    │  (复用/超时/锁) │
+                    └───────────────┘
 ```
 
 1. 在 Android 设备上启动 `frida-server`（root 设备）或使用 APK 注入器注入 `frida-gadget`（非 root 设备）。
-2. 启动 MCP 服务器，监听 `8768` 端口。
+2. 启动 MCP 服务器（默认 stdio 传输，适合 Claude Desktop；远程使用 HTTP/SSE）。
 3. AI 客户端通过 MCP 协议连接服务器，调用各种 Frida 工具。
 4. AI 可以列出进程、Hook 方法、读取内存、监控网络、自动化 UI 等。
+5. 会话管理器自动管理 Frida 会话的生命周期（复用、超时回收、并发锁）。
 
 ## 核心特性
 
 - **9 个 MCP 模块**：进程管理、Hook 管理、内存检查、网络监控、文件系统、UI 自动化、加密分析、日志捕获、**自定义脚本执行**
-- **直接运行 Frida JS 脚本**：AI 可通过 `run_script` 工具直接编写并执行任意 Frida JavaScript，不再局限于预置模板
-- **APK 注入器**：自动将 `frida-gadget` 注入 APK，支持非 root 设备
+- **直接运行 Frida JS 脚本**：AI 可通过 `run_script` / `run_hook_script` 工具直接编写并执行任意 Frida JavaScript，不再局限于预置模板
+- **Hook 沙箱隔离**：所有 Hook 脚本经过沙箱包装，异常被捕获并通过 `send()` 回传，不会导致目标进程崩溃
+- **SSL Pinning Bypass**：多层绕过（Java/OkHttp2/OkHttp3/Conscrypt/Native BoringSSL），支持抓包 HTTPS
+- **Native 加密 Hook**：覆盖 BoringSSL EVP 系列（EVP_EncryptInit_ex / EVP_DigestInit_ex / HMAC 等）
+- **SSL 密钥导出**：通过 SSL_CTX_set_keylog_callback 导出 SSLKEYLOGFILE 格式密钥，可直接导入 Wireshark
+- **APK 注入器**：自动将 `frida-gadget` 注入 APK，支持 v1/v2/v3 签名、多 ABI、加固检测
+- **会话生命周期管理**：会话复用、空闲超时回收、并发锁、保活线程
+- **多传输模式**：stdio（本地，默认）/ SSE / HTTP（远程）
 - **多设备支持**：支持 USB 设备、远程设备、模拟器
-- **脚本管理**：内置常用 Frida 脚本模板，支持自定义脚本、RPC 调用、文件加载
-- **实时日志**：捕获 Frida 脚本输出和应用日志
 - **AI 友好**：所有工具都设计为 AI 易于调用，参数清晰，返回结构化数据
+- **容器化部署**：提供 Dockerfile 和 docker-compose，支持一键部署
 
 ## 快速开始
 
@@ -61,10 +73,11 @@
 git clone https://github.com/yfy227/fridamcp.git
 cd fridamcp
 
-# 安装 Python 依赖
-pip install -r requirements.txt
+# 方式一：pip 安装（推荐）
+pip install -e .
 
-# 安装 Frida CLI
+# 方式二：安装依赖
+pip install -r requirements.txt
 pip install frida-tools
 ```
 
@@ -89,8 +102,14 @@ bash start_frida.sh
 # 进入 injector 目录
 cd injector
 
-# 注入 frida-gadget 到目标 APK
-python inject_apk.py --input target.apk --output target_injected.apk
+# 注入 frida-gadget 到目标 APK（简单模式）
+python inject_apk.py target.apk target_injected.apk
+
+# 或使用 apktool 完整模式（推荐，支持 smali 注入）
+python inject_apk.py target.apk target_injected.apk --use-apktool
+
+# 检测 APK 是否被加固
+python inject_apk.py target.apk --check-packer
 
 # 安装注入后的 APK
 adb install target_injected.apk
@@ -102,16 +121,42 @@ adb shell am start -n com.target.app/.MainActivity
 ### 启动 MCP 服务器
 
 ```bash
-# 启动 MCP 服务器（监听 8768 端口）
-python -m fridamcp.server
+# 方式一：stdio 传输（默认，适合 Claude Desktop / Cursor 本地使用）
+fridamcp -t stdio
 
-# 或使用脚本
-bash scripts/run.sh
+# 方式二：HTTP 传输（远程访问）
+fridamcp -t http -p 8768
+
+# 方式三：SSE 传输（远程访问）
+fridamcp -t sse -p 8768
+
+# 或使用 Python 模块
+python -m fridamcp -t stdio
 ```
+
+**传输模式选择**：
+- **stdio**（默认）：本地工具标准方式，延迟最低，适合 Claude Desktop / Cursor 等 AI 客户端
+- **SSE**：Server-Sent Events，适合远程调用场景
+- **HTTP**：Streamable HTTP，适合远程调用场景
 
 ### 配置 AI 客户端
 
-在 AI 客户端（如 Claude Desktop）的 MCP 配置中添加：
+#### Claude Desktop（stdio 模式，推荐）
+
+在 Claude Desktop 配置文件中添加：
+
+```json
+{
+  "mcpServers": {
+    "fridamcp": {
+      "command": "fridamcp",
+      "args": ["-t", "stdio"]
+    }
+  }
+}
+```
+
+#### Claude Desktop（HTTP 模式，远程）
 
 ```json
 {
@@ -123,19 +168,24 @@ bash scripts/run.sh
 }
 ```
 
+#### Cursor / 其他 AI 客户端
+
+参考对应客户端的 MCP 配置文档，使用 stdio 或 HTTP 模式连接。
+
 ## MCP 模块
 
 | 模块 | 说明 | 主要工具 |
 |------|------|----------|
 | **process** | 进程管理 | `list_processes`, `spawn_app`, `attach_process`, `kill_process`, `resume_process` |
-| **hook** | Hook 管理 | `hook_method`, `hook_native`, `unhook`, `list_hooks`, `trace_method` |
+| **hook** | Hook 管理（沙箱保护） | `hook_method`, `hook_native`, `trace_method`, `run_hook_script`, `validate_hook_script`, `get_sandbox_errors`, `unhook`, `list_hooks` |
 | **memory** | 内存检查 | `read_memory`, `write_memory`, `search_memory`, `list_modules`, `list_exports` |
-| **network** | 网络监控 | `start_capture`, `stop_capture`, `get_capture`, `hook_ssl` |
+| **network** | 网络监控 + SSL Bypass | `start_capture`, `stop_capture`, `get_capture`, `hook_ssl`, `bypass_ssl_pinning`, `get_pinning_bypass_status` |
 | **filesystem** | 文件系统 | `list_files`, `read_file`, `pull_file`, `push_file` |
 | **ui_automation** | UI 自动化 | `tap`, `input_text`, `screenshot`, `list_ui` |
-| **crypto** | 加密分析 | `hook_crypto`, `dump_keys`, `hook_ssl_keys` |
+| **crypto** | 加密分析（Java + Native） | `hook_crypto`, `hook_native_crypto`, `get_crypto_operations`, `dump_keys`, `hook_ssl_keys`, `get_ssl_keylog` |
 | **log** | 日志捕获 | `start_log`, `get_logs`, `clear_all_logs` |
-| **script** | **自定义脚本执行** | `run_script`, `call_script_rpc`, `unload_script`, `list_scripts`, `load_script_file`, `get_script_messages` |
+| **script** | 自定义脚本执行 | `run_script`, `call_script_rpc`, `unload_script`, `list_scripts`, `load_script_file`, `get_script_messages` |
+| **session** | 会话生命周期管理 | `list_sessions`, `get_session_info`, `close_session`, `cleanup_sessions`, `session_manager_status` |
 
 详细文档请参考 [docs/MODULES.md](docs/MODULES.md)。
 
@@ -145,27 +195,29 @@ bash scripts/run.sh
 fridamcp/
 ├── fridamcp/                  # MCP 服务器主包
 │   ├── __init__.py
-│   ├── server.py              # MCP 服务器入口 (端口 8768)
-│   ├── config.py              # 配置管理
+│   ├── __main__.py            # Python -m 入口
+│   ├── server.py              # MCP 服务器入口（stdio/HTTP/SSE）
+│   ├── config.py              # 配置管理（含会话/传输配置）
 │   ├── core/                  # 核心封装
 │   │   ├── frida_client.py    # Frida 客户端封装
 │   │   ├── device_manager.py  # 设备管理
-│   │   └── session_manager.py # 会话管理
+│   │   └── session_manager.py # 会话管理（生命周期/复用/超时/锁）
 │   ├── modules/               # MCP 模块
 │   │   ├── process.py         # 进程管理
-│   │   ├── hook.py            # Hook 管理
+│   │   ├── hook.py            # Hook 管理（沙箱保护）
 │   │   ├── memory.py          # 内存检查
-│   │   ├── network.py         # 网络监控
+│   │   ├── network.py         # 网络监控 + SSL Pinning Bypass
 │   │   ├── filesystem.py      # 文件系统
 │   │   ├── ui_automation.py   # UI 自动化
-│   │   ├── crypto.py          # 加密分析
+│   │   ├── crypto.py          # 加密分析（Java + Native BoringSSL）
 │   │   ├── log.py             # 日志捕获
-│   │   └── script.py          # 自定义脚本执行（核心）
+│   │   └── script.py          # 自定义脚本执行
 │   └── utils/                 # 工具
-│       ├── apk_injector.py    # APK 注入逻辑
+│       ├── apk_injector.py    # APK 注入（v2/v3 签名/多 ABI/加固检测）
+│       ├── hook_sandbox.py    # Hook 沙箱（异常隔离）
 │       └── logger.py          # 日志工具
 ├── injector/                  # APK 注入器
-│   ├── inject_apk.py          # 注入脚本
+│   ├── inject_apk.py          # 注入 CLI
 │   ├── frida_gadget/          # frida-gadget 二进制
 │   └── templates/             # 配置模板
 ├── android/                   # Android 端
@@ -180,10 +232,94 @@ fridamcp/
 │   ├── USAGE.md               # 使用指南
 │   └── MODULES.md             # 模块文档
 ├── tests/                     # 测试
+├── Dockerfile                 # 容器化部署
+├── docker-compose.yml         # Docker Compose
+├── fridamcp.spec              # PyInstaller 打包配置
+├── build.sh                   # 构建脚本
 ├── requirements.txt           # Python 依赖
 ├── setup.py                   # 安装配置
 └── README.md                  # 项目说明
 ```
+
+## 架构设计
+
+### Session 生命周期管理
+
+FridaMCP 2.0 引入了显式的 Session 生命周期管理，解决多 AI 并发调用、会话泄漏等问题。
+
+**生命周期状态**：
+```
+CREATED → ATTACHED → IDLE → DETACHED
+                ↓                  ↑
+              EXPIRED ──────────────┘
+                (超时回收)
+```
+
+**核心机制**：
+- **会话复用**：同一 PID 默认复用现有活动会话，避免重复 attach 开销
+- **空闲超时**：会话空闲超过 `SESSION_IDLE_TIMEOUT`（默认 600 秒）自动分离回收
+- **并发锁**：每个会话持有独立 RLock，防止多 AI 并发调用同一会话产生竞态
+- **保活线程**：后台线程周期性检查会话状态、清理超时/已分离会话
+- **引用计数**：支持多调用者复用同一会话，引用计数降为 0 才真正分离
+
+**相关工具**：`list_sessions` / `get_session_info` / `close_session` / `session_manager_status`
+
+### Hook 沙箱隔离
+
+AI 生成的 Frida hook 脚本质量不稳定，直接加载可能导致目标进程崩溃。FridaMCP 2.0 引入沙箱包装层：
+
+**沙箱策略**：
+1. **脚本包装**：将 AI 原始脚本包裹在 try-catch 中，所有顶层异常被捕获并通过 `send()` 回传
+2. **语法预检**：加载前对脚本做轻量级静态检查（括号匹配、危险 API 检测）
+3. **加载重试**：脚本加载失败时自动卸载残留并重试一次
+4. **错误聚合**：收集脚本运行时错误，供 AI 调试迭代
+
+**相关工具**：`run_hook_script` / `validate_hook_script` / `get_sandbox_errors`
+
+### SSL Pinning Bypass
+
+覆盖 Android 应用证书校验的多个层级：
+
+| 层级 | Hook 目标 | 说明 |
+|------|-----------|------|
+| Java | `SSLContext.init` | 替换为信任所有证书的 TrustManager |
+| Java | `HostnameVerifier` | 信任所有主机名 |
+| OkHttp3 | `CertificatePinner.check` / `check$okhttp` | OkHttp3 证书校验 |
+| OkHttp2 | `com.squareup.okhttp.CertificatePinner` | OkHttp2 证书校验 |
+| Conscrypt | `TrustManagerImpl.checkTrustedRecursive` / `verifyChain` | Android 8+ 默认 Provider |
+| Native | `SSL_CTX_set_verify` / `SSL_get_verify_result` | BoringSSL/OpenSSL |
+| Native | `SSL_CTX_set_custom_verify` / `SSL_set_verify` | BoringSSL 特有 |
+
+**相关工具**：`bypass_ssl_pinning` / `get_pinning_bypass_status`
+
+### 加密 Hook 覆盖
+
+| 层级 | Hook 目标 | 说明 |
+|------|-----------|------|
+| Java | `javax.crypto.Cipher` | AES/DES/RSA/SM4 等 |
+| Java | `javax.crypto.spec.SecretKeySpec` | 对称密钥构造 |
+| Java | `javax.crypto.Mac` | HMAC |
+| Java | `java.security.MessageDigest` | MD5/SHA1/SHA256/SM3 |
+| Native | `EVP_EncryptInit_ex` / `EVP_DecryptInit_ex` | BoringSSL 对称加密 |
+| Native | `EVP_DigestInit_ex` / `EVP_DigestFinal_ex` | BoringSSL 哈希 |
+| Native | `HMAC_Init_ex` | BoringSSL HMAC |
+| Native | `RSA_generate_key_ex` | RSA 密钥生成 |
+| SSL | `SSL_CTX_set_keylog_callback` | SSLKEYLOGFILE 格式密钥导出 |
+
+**相关工具**：`hook_crypto` / `hook_native_crypto` / `get_crypto_operations` / `hook_ssl_keys` / `get_ssl_keylog`
+
+### APK 注入器增强
+
+| 特性 | 说明 |
+|------|------|
+| v1/v2/v3 签名 | 使用 `apksigner` 显式启用所有签名方案 |
+| zipalign 对齐 | 签名前自动对齐，满足 Android 11+ 要求 |
+| 多 ABI 检测 | 自动检测 APK 包含的所有 ABI，分别注入对应 gadget |
+| 加固检测 | 检测梆梆/爱加密/360/腾讯/娜迦等常见加固，给出注入建议 |
+| smali 注入 | apktool 模式下在 Application.onCreate 插入 loadLibrary |
+| 注入点选择 | 优先 Application.onCreate，回退 MainActivity.onCreate |
+
+**相关 CLI**：`fridamcp-inject` / `python injector/inject_apk.py`
 
 ## 使用示例
 
@@ -276,12 +412,88 @@ FridaMCP:
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `MCP_PORT` | `8768` | MCP 服务器监听端口 |
+| `MCP_TRANSPORT` | `stdio` | MCP 传输模式（stdio/sse/http） |
+| `MCP_PORT` | `8768` | MCP 服务器监听端口（HTTP/SSE 模式） |
 | `MCP_HOST` | `0.0.0.0` | MCP 服务器监听地址 |
 | `FRIDA_DEVICE_ID` | `None` | Frida 设备 ID（None 表示自动选择） |
 | `FRIDA_DEVICE_TYPE` | `usb` | 设备类型（usb/remote/local） |
 | `LOG_LEVEL` | `INFO` | 日志级别 |
 | `SCRIPT_TIMEOUT` | `30` | 脚本执行超时（秒） |
+| `SESSION_IDLE_TIMEOUT` | `600` | 会话空闲超时（秒，0 表示永不超时） |
+| `SESSION_LOCK_TIMEOUT` | `30` | 会话操作锁获取超时（秒） |
+| `SESSION_KEEPALIVE_INTERVAL` | `30` | 会话保活检查间隔（秒） |
+| `MAX_SESSIONS` | `10` | 最大并发会话数 |
+
+所有配置项均可通过环境变量覆盖，前缀为 `FRIDAMCP_`。
+
+## 打包与部署
+
+### 方式一：pip 安装
+
+```bash
+pip install -e .
+# 使用
+fridamcp -t stdio
+fridamcp-inject target.apk --use-apktool
+```
+
+### 方式二：PyInstaller 打包为独立可执行文件
+
+```bash
+# 安装打包依赖
+pip install pyinstaller
+
+# 打包
+./build.sh
+# 或
+pyinstaller fridamcp.spec --noconfirm
+
+# 运行
+./dist/fridamcp/fridamcp -t stdio
+```
+
+### 方式三：Docker 容器化部署
+
+```bash
+# 构建镜像
+docker build -t fridamcp .
+
+# 运行（stdio 模式，本地使用）
+docker run -i --rm fridamcp
+
+# 运行（HTTP 模式，远程访问）
+docker run -p 8768:8768 --rm fridamcp -t http -p 8768 --host 0.0.0.0
+
+# 使用 docker-compose
+docker compose up -d
+```
+
+Docker 镜像包含：
+- Python 3.11 + FridaMCP
+- adb（Android 设备通信）
+- OpenJDK 17（APK 签名）
+- zipalign + apksigner（APK 对齐与签名）
+
+## 已知局限性
+
+### SSL Pinning Bypass
+- **加固应用**（梆梆/爱加密/360/腾讯/娜迦）可能自定义校验逻辑，需要先脱壳或定位自定义校验函数
+- **厂商魔改 BoringSSL**（腾讯 X5 / 阿里 SSL）函数名可能不同，需要额外 hook
+- **Flutter / React Native** 应用静态链接 BoringSSL，需通过内存特征扫描定位 SSL 函数
+
+### 加密 Hook
+- 厂商魔改 BoringSSL 函数名可能不同
+- Flutter 静态链接 BoringSSL 需内存扫描定位
+- 国密 SM2/SM3/SM4 可能使用第三方库（如 BC、GMSecurity），需额外 hook
+
+### APK 注入
+- **签名校验应用**（银行/支付类）可能检测到签名变化后拒绝运行
+- **加固 APK** 的 Application 类被壳接管，gadget 注入点可能无效，需先脱壳
+- **v2/v3 签名** 注入后原签名作废，使用 debug keystore 重签名
+
+### Session 管理
+- 会话超时回收是尽力而为，极端情况下可能有延迟
+- 并发锁防止竞态但不防止死锁，AI 应避免长时间持有会话
 
 ## 安全提示
 

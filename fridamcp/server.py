@@ -114,6 +114,7 @@ def create_mcp_server():
         try:
             before = len(session_manager.list_sessions())
             session_manager._cleanup_detached()
+            session_manager._cleanup_expired()
             after = len(session_manager.list_sessions())
             cleaned = before - after
             return {
@@ -124,6 +125,81 @@ def create_mcp_server():
         except Exception as e:
             logger.error(f"cleanup_sessions failed: {e}")
             return {"error": str(e)}
+
+    @mcp.tool()
+    def list_sessions() -> list:
+        """列出所有 Frida 会话及其生命周期状态
+
+        返回每个会话的详细信息，包括：
+        - id / pid / name
+        - state: created / attached / detached / error / expired
+        - scripts: 已加载脚本列表
+        - hooks: 已注册 Hook 列表
+        - created_at / attached_at / detached_at
+        - last_active_at / idle_seconds: 用于判断空闲超时
+        - detach_reason: 分离原因（进程退出/崩溃等）
+        - ref_count: 引用计数（会话复用场景）
+
+        Returns:
+            会话信息列表
+        """
+        return session_manager.list_sessions()
+
+    @mcp.tool()
+    def get_session_info(session_id: str) -> dict:
+        """获取指定会话的详细信息
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            会话详细信息，包括状态、脚本、Hook、消息计数、时间戳等
+        """
+        session = session_manager.get_session(session_id)
+        if session is None:
+            return {"error": f"Session not found: {session_id}"}
+        return session.get_info()
+
+    @mcp.tool()
+    def close_session(session_id: str, force: bool = False) -> dict:
+        """关闭指定会话，释放 Frida 资源
+
+        会话采用引用计数机制：当多个调用者复用同一会话时，
+        仅当引用计数降为 0 才真正分离。设置 force=True 可强制关闭。
+
+        Args:
+            session_id: 会话 ID
+            force: 是否强制关闭（忽略引用计数）
+
+        Returns:
+            操作结果
+        """
+        try:
+            success = session_manager.close_session(session_id, force=force)
+            return {
+                "success": success,
+                "session_id": session_id,
+                "force": force,
+            }
+        except Exception as e:
+            logger.error(f"close_session failed: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def session_manager_status() -> dict:
+        """获取会话管理器状态
+
+        返回会话管理器的运行状态，包括：
+        - total/active/detached/expired sessions 数量
+        - max_sessions 上限
+        - idle_timeout 空闲超时配置
+        - keepalive_interval 保活检查间隔
+        - keepalive_running 保活线程是否运行
+
+        Returns:
+            会话管理器状态字典
+        """
+        return session_manager.get_status()
 
     return mcp
 
@@ -307,9 +383,14 @@ def main():
     )
     parser.add_argument(
         "--transport", "-t",
-        choices=["sse", "http", "stdio"],
-        default="sse",
-        help="Transport type (default: sse)",
+        choices=["stdio", "sse", "http"],
+        default=config.MCP_TRANSPORT,
+        help=(
+            "Transport type (default: stdio). "
+            "stdio: local tool standard (Claude Desktop/Cursor), lowest latency. "
+            "sse: remote via Server-Sent Events. "
+            "http: remote via Streamable HTTP."
+        ),
     )
     parser.add_argument(
         "--log-level",

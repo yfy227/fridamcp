@@ -5,7 +5,7 @@ with open("README.md", "r", encoding="utf-8") as f:
 
 setup(
     name="fridamcp",
-    version="1.1.0",
+    version="2.0.0",
     author="yfy227",
     author_email="yfy227@users.noreply.github.com",
     description="AI-Powered Frida MCP Server for Android - 在 Android 上运行 Frida 并通过 MCP 协议让 AI 便捷使用",
@@ -40,10 +40,24 @@ setup(
         "loguru>=0.7.0",
         "httpx>=0.25.0",
     ],
+    extras_require={
+        "dev": [
+            "pytest>=7.0.0",
+            "pytest-asyncio>=0.21.0",
+            "pyinstaller>=6.0.0",
+        ],
+        "injector": [
+            "apkutils2>=1.0.0",
+        ],
+    },
     entry_points={
         "console_scripts": [
             "fridamcp=fridamcp.server:main",
             "fridamcp-inject=injector.inject_apk:main",
         ],
+    },
+    include_package_data=True,
+    package_data={
+        "fridamcp": ["templates/*", "scripts/*"],
     },
 )
