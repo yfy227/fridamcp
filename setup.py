@@ -1,17 +1,42 @@
+"""FridaMCP setup.py — version is read from fridamcp/__init__.py (single source of truth)."""
+
+import re
+import os
+
 from setuptools import setup, find_packages
 
-with open("README.md", "r", encoding="utf-8") as f:
-    long_description = f.read()
+
+def read_version():
+    """Read __version__ from fridamcp/__init__.py (single source of truth)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    init_path = os.path.join(here, "fridamcp", "__init__.py")
+    with open(init_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    match = re.search(r'^__version__\s*=\s*["\']([^"\']+)["\']', content, re.M)
+    if not match:
+        raise RuntimeError("Cannot find __version__ in fridamcp/__init__.py")
+    return match.group(1)
+
+
+def read_long_description():
+    with open("README.md", "r", encoding="utf-8") as f:
+        return f.read()
+
 
 setup(
     name="fridamcp",
-    version="2.0.0",
+    version=read_version(),
     author="yfy227",
     author_email="yfy227@users.noreply.github.com",
     description="AI-Powered Frida MCP Server for Android - 在 Android 上运行 Frida 并通过 MCP 协议让 AI 便捷使用",
-    long_description=long_description,
+    long_description=read_long_description(),
     long_description_content_type="text/markdown",
     url="https://github.com/yfy227/fridamcp",
+    project_urls={
+        "GitHub": "https://github.com/yfy227/fridamcp",
+        "Changelog": "https://github.com/yfy227/fridamcp/blob/main/CHANGELOG.md",
+        "Issues": "https://github.com/yfy227/fridamcp/issues",
+    },
     packages=find_packages(),
     classifiers=[
         "Development Status :: 4 - Beta",
@@ -45,6 +70,8 @@ setup(
             "pytest>=7.0.0",
             "pytest-asyncio>=0.21.0",
             "pyinstaller>=6.0.0",
+            "build>=1.0.0",
+            "twine>=4.0.0",
         ],
         "injector": [
             "apkutils2>=1.0.0",

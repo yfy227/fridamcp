@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fridamcp"
+dynamic = ["version"]
+description = "AI-Powered Frida MCP Server for Android"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+authors = [
+    {name = "yfy227", email = "yfy227@users.noreply.github.com"},
+]
+keywords = ["frida", "mcp", "android", "security", "reverse-engineering", "ai"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: Software Development :: Debuggers",
+]
+dependencies = [
+    "mcp>=1.0.0",
+    "frida>=16.0.0",
+    "frida-tools>=12.0.0",
+    "uvicorn>=0.24.0",
+    "starlette>=0.32.0",
+    "pydantic>=2.0.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "loguru>=0.7.0",
+    "httpx>=0.25.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pyinstaller>=6.0.0",
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
+injector = [
+    "apkutils2>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yfy227/fridamcp"
+GitHub = "https://github.com/yfy227/fridamcp"
+Changelog = "https://github.com/yfy227/fridamcp/blob/main/CHANGELOG.md"
+Issues = "https://github.com/yfy227/fridamcp/issues"
+
+[project.scripts]
+fridamcp = "fridamcp.server:main"
+fridamcp-inject = "injector.inject_apk:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = {attr = "fridamcp.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["fridamcp*", "injector*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"

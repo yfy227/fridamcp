@@ -17,6 +17,7 @@ from .utils.logger import setup_logging, logger
 from .modules import ALL_MODULES
 from .core.session_manager import session_manager
 from .core.device_manager import device_manager
+from . import __version__
 
 
 # 全局关闭事件
@@ -70,7 +71,7 @@ def create_mcp_server():
         """
         return {
             "name": "FridaMCP",
-            "version": "1.0.0",
+            "version": __version__,
             "port": config.MCP_PORT,
             "host": config.MCP_HOST,
             "modules": registered_modules,
@@ -191,7 +192,7 @@ def _create_basic_server():
             import json
             info = {
                 "name": "FridaMCP",
-                "version": "1.0.0",
+                "version": __version__,
                 "port": config.MCP_PORT,
                 "note": "Running in basic mode (FastMCP not available)",
             }

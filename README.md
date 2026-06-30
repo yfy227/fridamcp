@@ -1,10 +1,12 @@
 # FridaMCP - AI-Powered Frida MCP Server for Android
 
+[![PyPI version](https://img.shields.io/pypi/v/fridamcp.svg)](https://pypi.org/project/fridamcp/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![MCP Protocol](https://img.shields.io/badge/MCP-Protocol-green.svg)](https://modelcontextprotocol.io/)
 [![Frida](https://img.shields.io/badge/Frida-16+-orange.svg)](https://frida.re/)
-[![Version](https://img.shields.io/badge/version-2.0.0-blue.svg)]()
+[![CI](https://github.com/yfy227/fridamcp/actions/workflows/ci.yml/badge.svg)](https://github.com/yfy227/fridamcp/actions)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![GitHub release](https://img.shields.io/github/release/yfy227/fridamcp.svg)](https://github.com/yfy227/fridamcp/releases)
 
 > 在 Android 设备上运行 Frida，并通过 MCP (Model Context Protocol) 服务让 AI 更加便捷地使用 Frida 进行动态分析、Hook、内存检查、网络监控等操作。
 
@@ -68,17 +70,38 @@
 
 ### 安装
 
+#### 方式一：pip 安装（最简单，推荐）
+
 ```bash
-# 克隆仓库
+pip install fridamcp
+```
+
+安装后直接使用：
+```bash
+fridamcp -t stdio          # 启动 MCP 服务器
+fridamcp --self-test       # 自测
+fridamcp --list-tools      # 列出所有工具
+fridamcp-inject app.apk    # APK 注入
+```
+
+#### 方式二：下载预编译二进制（无需 Python 环境）
+
+前往 [GitHub Releases](https://github.com/yfy227/fridamcp/releases) 下载对应平台的二进制包：
+- `fridamcp-linux-x64.tar.gz`
+- `fridamcp-windows-x64.zip`
+- `fridamcp-macos-x64.tar.gz`
+
+解压后直接运行：
+```bash
+./fridamcp/fridamcp -t stdio
+```
+
+#### 方式三：从源码安装（开发用）
+
+```bash
 git clone https://github.com/yfy227/fridamcp.git
 cd fridamcp
-
-# 方式一：pip 安装（推荐）
-pip install -e .
-
-# 方式二：安装依赖
-pip install -r requirements.txt
-pip install frida-tools
+pip install -e ".[dev]"
 ```
 
 ### Android 端准备

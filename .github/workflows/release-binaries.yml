@@ -1,0 +1,129 @@
+name: Release Binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-binary:
+    name: Build ${{ matrix.os }} binary
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            artifact_name: fridamcp-linux-x64
+            archive_ext: tar.gz
+          - os: windows-latest
+            platform: windows
+            artifact_name: fridamcp-windows-x64
+            archive_ext: zip
+          - os: macos-latest
+            platform: macos
+            artifact_name: fridamcp-macos-x64
+            archive_ext: tar.gz
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pyinstaller
+
+      - name: Build with PyInstaller
+        run: pyinstaller fridamcp.spec --noconfirm
+
+      - name: Verify binary works (Linux/macOS)
+        if: matrix.platform != 'windows'
+        run: |
+          ./dist/fridamcp/fridamcp --self-test || true
+          ./dist/fridamcp/fridamcp --list-tools 2>/dev/null | head -3
+
+      - name: Verify binary works (Windows)
+        if: matrix.platform == 'windows'
+        run: |
+          .\dist\fridamcp\fridamcp.exe --self-test
+          .\dist\fridamcp\fridamcp.exe --list-tools 2>$null | Select-Object -First 3
+
+      - name: Archive (Linux/macOS)
+        if: matrix.platform != 'windows'
+        run: |
+          cd dist
+          tar -czf ../${{ matrix.artifact_name }}.tar.gz fridamcp
+          cd ..
+
+      - name: Archive (Windows)
+        if: matrix.platform == 'windows'
+        run: |
+          cd dist
+          Compress-Archive -Path fridamcp -DestinationPath ..\${{ matrix.artifact_name }}.zip
+          cd ..
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            ${{ matrix.artifact_name }}.tar.gz
+            ${{ matrix.artifact_name }}.zip
+          if-no-files-found: ignore
+
+  create-release:
+    name: Create GitHub Release
+    needs: build-binary
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: List artifacts
+        run: find artifacts/ -type f | head -20
+
+      - name: Extract changelog for release notes
+        id: changelog
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          # Extract the section for this version from CHANGELOG.md
+          python3 -c "
+          import re
+          with open('CHANGELOG.md') as f:
+              content = f.read()
+          # Find the section for this version
+          pattern = r'## \[${TAG_VERSION}\].*?(?=\n## \[|\Z)'.replace('{TAG_VERSION}', '$TAG_VERSION')
+          match = re.search(pattern, content, re.DOTALL)
+          if match:
+              print(match.group(0))
+          else:
+              print('Release $TAG_VERSION')
+          " > release_notes.md
+          cat release_notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: FridaMCP ${{ github.ref_name }}
+          body_path: release_notes.md
+          files: |
+            artifacts/**/*.tar.gz
+            artifacts/**/*.zip
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

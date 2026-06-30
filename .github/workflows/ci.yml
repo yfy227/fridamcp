@@ -28,6 +28,13 @@ jobs:
           pip install -e .
           pip install pytest pytest-asyncio
 
+      - name: Verify version consistency
+        run: |
+          VERSION=$(python -c "from fridamcp import __version__; print(__version__)")
+          echo "Package version: $VERSION"
+          grep -q "$VERSION" CHANGELOG.md && echo "CHANGELOG.md: OK" || (echo "CHANGELOG.md: MISSING $VERSION" && exit 1)
+          grep -q "$VERSION" setup.py && echo "setup.py: OK" || (echo "setup.py: MISSING $VERSION" && exit 1)
+
       - name: Run self-test
         run: |
           python -m fridamcp --self-test
