@@ -579,6 +579,15 @@ make clean        # 清理构建产物
 - **加固 APK** 的 Application 类被壳接管，gadget 注入点可能无效，需先脱壳
 - **v2/v3 签名** 注入后原签名作废，使用 debug keystore 重签名
 
+### APK 注入器修复（v2.2）
+v2.2 修复了导致注入后 APK 破损/无法安装的关键问题：
+- **重新打包保留原始压缩方式**：.so 文件用 STORED（Android mmap 优化要求）
+- **注入前剥离原签名**：自动移除 META-INF/*.SF|*.RSA|*.MF，避免签名冲突
+- **smali 寄存器分配修复**：自动扩容 .locals，防止 INSTALL_FAILED_DEXOPT
+- **smali 注入点修复**：跳过 .annotation/.param 块，插入到正确位置
+- **simple 模式真正注入**：不再只加 .so，而是调用 apktool 修改 smali
+- **APK 完整性验证**：注入后用 aapt 验证 APK 可正常解析
+
 ### Session 管理
 - 会话超时回收是尽力而为，极端情况下可能有延迟
 - 并发锁防止竞态但不防止死锁，AI 应避免长时间持有会话
