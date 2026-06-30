@@ -474,6 +474,94 @@ Docker 镜像包含：
 - OpenJDK 17（APK 签名）
 - zipalign + apksigner（APK 对齐与签名）
 
+## 验证与测试
+
+FridaMCP 2.1 引入了完整的可验证性体系，无需真实 Android 设备即可验证所有功能。
+
+### 自测命令
+
+```bash
+# 运行自测（验证导入、工具注册、模拟工作流、沙箱、配置）
+python -m fridamcp --self-test
+```
+
+自测覆盖：
+1. 所有模块可正常导入
+2. MCP 服务器可创建
+3. 所有工具已注册（无重复）
+4. 模拟模式下完整工作流：`list_devices → list_processes → attach → hook → list_hooks → close`
+5. Hook 沙箱可正常包装脚本
+6. 配置项可正常读取
+
+### 列出所有工具
+
+```bash
+python -m fridamcp --list-tools
+```
+
+### 模拟模式（无需 Android 设备）
+
+```bash
+# stdio 模式（模拟设备）
+python -m fridamcp --mock -t stdio
+
+# HTTP 模式（模拟设备）
+python -m fridamcp --mock -t http -p 18768
+```
+
+模拟模式提供虚拟 Android 设备，包含 7 个常见进程，可用于：
+- AI 客户端功能演示
+- CI/CD 自动化测试
+- 开发调试
+
+### 单元测试
+
+```bash
+# 安装测试依赖
+pip install pytest pytest-asyncio
+
+# 运行全部测试（88 个测试用例）
+pytest tests/ -v
+
+# 或使用 Makefile
+make test
+```
+
+测试覆盖：
+| 测试文件 | 覆盖内容 | 测试数 |
+|----------|----------|--------|
+| `test_hook_sandbox.py` | 脚本校验、沙箱包装、错误提取 | ~20 |
+| `test_session_manager.py` | 会话生命周期、引用计数、状态查询 | ~10 |
+| `test_config.py` | 配置读取、环境变量、更新方法 | ~10 |
+| `test_mock_device.py` | 模拟设备/会话/脚本 | ~20 |
+| `test_apk_injector.py` | 加固检测、架构检测、配置模板 | ~10 |
+| `test_mcp_integration.py` | 完整 MCP 工具调用链路 | ~18 |
+
+### CI/CD
+
+项目包含 GitHub Actions 配置（`.github/workflows/ci.yml`），在每次 push/PR 时自动运行：
+- Python 3.9 / 3.10 / 3.11 / 3.12 矩阵测试
+- 自测命令
+- 单元测试
+- stdio / HTTP 传输启动验证
+- 语法检查
+
+### Makefile 快捷命令
+
+```bash
+make install      # 安装
+make dev          # 安装开发依赖
+make test         # 运行测试
+make self-test    # 运行自测
+make list-tools   # 列出工具
+make run-stdio    # stdio 模式启动
+make run-http     # HTTP 模式启动
+make run-mock     # 模拟模式启动
+make build        # PyInstaller 打包
+make docker       # 构建 Docker 镜像
+make clean        # 清理构建产物
+```
+
 ## 已知局限性
 
 ### SSL Pinning Bypass

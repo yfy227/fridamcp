@@ -158,29 +158,43 @@ def register_tools(mcp):
 
     @mcp.tool()
     def list_sessions() -> List[Dict[str, Any]]:
-        """列出所有活跃的 Frida 会话
+        """列出所有 Frida 会话及其生命周期状态
 
-        返回会话列表，每个会话包含 id、pid、name、scripts、hooks、message_count。
+        返回每个会话的详细信息，包括：
+        - id / pid / name
+        - state: created / attached / detached / error / expired
+        - scripts: 已加载脚本列表
+        - hooks: 已注册 Hook 列表
+        - created_at / attached_at / detached_at
+        - last_active_at / idle_seconds: 用于判断空闲超时
+        - detach_reason: 分离原因（进程退出/崩溃等）
+        - ref_count: 引用计数（会话复用场景）
         """
         try:
-            return frida_client.list_sessions()
+            from ..core.session_manager import session_manager
+            return session_manager.list_sessions()
         except Exception as e:
             logger.error(f"list_sessions failed: {e}")
             return [{"error": str(e)}]
 
     @mcp.tool()
-    def close_session(session_id: str) -> Dict[str, Any]:
-        """关闭指定会话
+    def close_session(session_id: str, force: bool = False) -> Dict[str, Any]:
+        """关闭指定会话，释放 Frida 资源
+
+        会话采用引用计数机制：当多个调用者复用同一会话时，
+        仅当引用计数降为 0 才真正分离。设置 force=True 可强制关闭。
 
         Args:
             session_id: 会话 ID
+            force: 是否强制关闭（忽略引用计数）
 
         Returns:
             操作结果
         """
         try:
-            success = frida_client.close_session(session_id)
-            return {"success": success, "session_id": session_id}
+            from ..core.session_manager import session_manager
+            success = session_manager.close_session(session_id, force=force)
+            return {"success": success, "session_id": session_id, "force": force}
         except Exception as e:
             logger.error(f"close_session failed: {e}")
             return {"error": str(e)}

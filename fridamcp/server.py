@@ -127,27 +127,8 @@ def create_mcp_server():
             return {"error": str(e)}
 
     @mcp.tool()
-    def list_sessions() -> list:
-        """列出所有 Frida 会话及其生命周期状态
-
-        返回每个会话的详细信息，包括：
-        - id / pid / name
-        - state: created / attached / detached / error / expired
-        - scripts: 已加载脚本列表
-        - hooks: 已注册 Hook 列表
-        - created_at / attached_at / detached_at
-        - last_active_at / idle_seconds: 用于判断空闲超时
-        - detach_reason: 分离原因（进程退出/崩溃等）
-        - ref_count: 引用计数（会话复用场景）
-
-        Returns:
-            会话信息列表
-        """
-        return session_manager.list_sessions()
-
-    @mcp.tool()
     def get_session_info(session_id: str) -> dict:
-        """获取指定会话的详细信息
+        """获取指定会话的详细信息（生命周期/脚本/Hook/消息计数/时间戳）
 
         Args:
             session_id: 会话 ID
@@ -159,31 +140,6 @@ def create_mcp_server():
         if session is None:
             return {"error": f"Session not found: {session_id}"}
         return session.get_info()
-
-    @mcp.tool()
-    def close_session(session_id: str, force: bool = False) -> dict:
-        """关闭指定会话，释放 Frida 资源
-
-        会话采用引用计数机制：当多个调用者复用同一会话时，
-        仅当引用计数降为 0 才真正分离。设置 force=True 可强制关闭。
-
-        Args:
-            session_id: 会话 ID
-            force: 是否强制关闭（忽略引用计数）
-
-        Returns:
-            操作结果
-        """
-        try:
-            success = session_manager.close_session(session_id, force=force)
-            return {
-                "success": success,
-                "session_id": session_id,
-                "force": force,
-            }
-        except Exception as e:
-            logger.error(f"close_session failed: {e}")
-            return {"error": str(e)}
 
     @mcp.tool()
     def session_manager_status() -> dict:
@@ -363,6 +319,196 @@ def run_stdio_server(mcp):
         logger.info("Server shutdown complete")
 
 
+async def _print_tools(mcp):
+    """打印所有已注册的 MCP 工具"""
+    tools = await mcp.list_tools()
+    print(f"\n{'='*60}")
+    print(f"FridaMCP - {len(tools)} registered tools")
+    print(f"{'='*60}")
+    for t in sorted(tools, key=lambda x: x.name):
+        desc = (t.description or "").split("\n")[0][:70]
+        print(f"  {t.name:<30} {desc}")
+    print(f"{'='*60}\n")
+
+
+def run_self_test() -> int:
+    """运行自测
+
+    验证以下内容：
+      1. 所有模块可正常导入
+      2. MCP 服务器可创建
+      3. 所有工具已注册（无重复）
+      4. 模拟模式下可完成完整工作流：
+         list_devices → list_processes → attach → hook → list_hooks → close
+      5. Hook 沙箱可正常包装脚本
+      6. 配置项可正常读取
+
+    Returns:
+        0 表示全部通过，1 表示有失败项
+    """
+    import json
+    from .utils.hook_sandbox import validate_script, wrap_script_safely
+
+    # 强制启用模拟模式
+    os.environ["FRIDAMCP_MOCK_DEVICE"] = "1"
+
+    results = []
+    passed = 0
+    failed = 0
+
+    def check(name: str, ok: bool, detail: str = ""):
+        nonlocal passed, failed
+        status = "PASS" if ok else "FAIL"
+        if ok:
+            passed += 1
+        else:
+            failed += 1
+        line = f"  [{status}] {name}"
+        if detail:
+            line += f" - {detail}"
+        print(line)
+        results.append((name, ok, detail))
+
+    print("\n" + "=" * 60)
+    print("FridaMCP Self-Test")
+    print("=" * 60)
+
+    # 1. 导入测试
+    print("\n[1/6] Module imports...")
+    try:
+        import fridamcp
+        import fridamcp.config
+        import fridamcp.server
+        import fridamcp.core.session_manager
+        import fridamcp.core.frida_client
+        import fridamcp.core.device_manager
+        import fridamcp.core.mock_device
+        import fridamcp.modules.process
+        import fridamcp.modules.hook
+        import fridamcp.modules.memory
+        import fridamcp.modules.network
+        import fridamcp.modules.filesystem
+        import fridamcp.modules.ui_automation
+        import fridamcp.modules.crypto
+        import fridamcp.modules.log
+        import fridamcp.modules.script
+        import fridamcp.utils.hook_sandbox
+        import fridamcp.utils.apk_injector
+        import fridamcp.utils.logger
+        check("All modules import", True)
+    except Exception as e:
+        check("All modules import", False, str(e))
+        print("\n" + "=" * 60)
+        print(f"SELF-TEST FAILED: {failed} failed, {passed} passed")
+        print("=" * 60)
+        return 1
+
+    # 2. 服务器创建
+    print("\n[2/6] MCP server creation...")
+    try:
+        mcp = create_mcp_server()
+        check("create_mcp_server()", True)
+    except Exception as e:
+        check("create_mcp_server()", False, str(e))
+        return 1
+
+    # 3. 工具注册
+    print("\n[3/6] Tool registration...")
+    try:
+        loop = asyncio.new_event_loop()
+        tools = loop.run_until_complete(mcp.list_tools())
+        check(f"Tools registered ({len(tools)})", len(tools) > 0, f"{len(tools)} tools")
+        # 检查重复
+        names = [t.name for t in tools]
+        from collections import Counter
+        dupes = {n: c for n, c in Counter(names).items() if c > 1}
+        check("No duplicate tools", len(dupes) == 0, str(dupes) if dupes else "")
+    except Exception as e:
+        check("Tool registration", False, str(e))
+
+    # 4. 模拟设备工作流
+    print("\n[4/6] Mock device workflow...")
+    try:
+        async def _workflow():
+            # list_devices
+            r = await mcp.call_tool("list_devices", {})
+            content = r[0] if isinstance(r, tuple) else r
+            data = json.loads(content[0].text)
+            assert len(data) > 0, "no devices"
+            # list_processes
+            r = await mcp.call_tool("list_processes", {})
+            content = r[0] if isinstance(r, tuple) else r
+            procs = json.loads(content[0].text)
+            assert len(procs) > 0, "no processes"
+            # attach
+            r = await mcp.call_tool("attach_process", {"target": "com.example.targetapp"})
+            content = r[0] if isinstance(r, tuple) else r
+            attach_data = json.loads(content[0].text)
+            sid = attach_data["session_id"]
+            # hook
+            r = await mcp.call_tool("hook_method", {
+                "session_id": sid,
+                "class_name": "com.example.Login",
+                "method_name": "check",
+            })
+            content = r[0] if isinstance(r, tuple) else r
+            hook_data = json.loads(content[0].text)
+            assert "hook_id" in hook_data, f"no hook_id: {hook_data}"
+            assert "sandbox_id" in hook_data, f"no sandbox_id: {hook_data}"
+            # list_hooks
+            r = await mcp.call_tool("list_hooks", {"session_id": sid})
+            content = r[0] if isinstance(r, tuple) else r
+            hooks = json.loads(content[0].text)
+            assert len(hooks) > 0, "no hooks"
+            # close
+            r = await mcp.call_tool("close_session", {"session_id": sid, "force": True})
+            return sid
+        loop.run_until_complete(_workflow())
+        check("list_devices → attach → hook → list_hooks → close", True)
+        loop.close()
+    except Exception as e:
+        check("Mock workflow", False, str(e))
+
+    # 5. Hook 沙箱
+    print("\n[5/6] Hook sandbox...")
+    try:
+        # valid script
+        valid = 'Java.perform(function(){ send({type:"test"}); });'
+        is_valid, errors, warnings = validate_script(valid)
+        check("Valid script passes", is_valid, f"errors={errors}")
+        # dangerous
+        dangerous = "Process.kill(0);"
+        is_valid, errors, warnings = validate_script(dangerous)
+        check("Dangerous API warning", len(warnings) > 0, f"warnings={warnings}")
+        # wrap
+        wrapped = wrap_script_safely(valid)
+        check("Sandbox wrap produces try-catch", "try" in wrapped and "catch" in wrapped)
+    except Exception as e:
+        check("Hook sandbox", False, str(e))
+
+    # 6. 配置
+    print("\n[6/6] Configuration...")
+    try:
+        check("MCP_TRANSPORT config", hasattr(config, "MCP_TRANSPORT"))
+        check("SESSION_IDLE_TIMEOUT config", hasattr(config, "SESSION_IDLE_TIMEOUT"))
+        check("SESSION_LOCK_TIMEOUT config", hasattr(config, "SESSION_LOCK_TIMEOUT"))
+        check("MAX_SESSIONS config", hasattr(config, "MAX_SESSIONS"))
+    except Exception as e:
+        check("Configuration", False, str(e))
+
+    # 清理
+    session_manager.close_all()
+
+    print("\n" + "=" * 60)
+    print(f"SELF-TEST RESULT: {passed} passed, {failed} failed")
+    if failed == 0:
+        print("ALL CHECKS PASSED")
+    else:
+        print(f"{failed} CHECK(S) FAILED")
+    print("=" * 60 + "\n")
+    return 0 if failed == 0 else 1
+
+
 def main():
     """主入口函数"""
     global _shutdown_event
@@ -413,8 +559,40 @@ def main():
         action="store_true",
         help="Disable server auto-restart on crash",
     )
+    parser.add_argument(
+        "--mock",
+        action="store_true",
+        help="Use mock device (no real Android device needed, for testing/CI)",
+    )
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="Run self-test (verify imports, tool registration, mock workflow) and exit",
+    )
+    parser.add_argument(
+        "--list-tools",
+        action="store_true",
+        help="List all registered MCP tools and exit",
+    )
 
     args = parser.parse_args()
+
+    # 模拟模式
+    if args.mock:
+        os.environ["FRIDAMCP_MOCK_DEVICE"] = "1"
+
+    # 初始化日志
+    setup_logging()
+
+    # 自测模式
+    if args.self_test:
+        sys.exit(run_self_test())
+
+    # 列出工具模式
+    if args.list_tools:
+        mcp = create_mcp_server()
+        asyncio.run(_print_tools(mcp))
+        sys.exit(0)
 
     # 就地更新配置单例（其他模块已持有同一引用，会立即生效）
     config.update(
@@ -425,9 +603,6 @@ def main():
         FRIDA_DEVICE_ID=args.device_id,
         SERVER_AUTO_RESTART_MAX=0 if args.no_auto_restart else None,
     )
-
-    # 初始化日志
-    setup_logging()
 
     logger.info("=" * 60)
     logger.info("FridaMCP - AI-Powered Frida MCP Server for Android")

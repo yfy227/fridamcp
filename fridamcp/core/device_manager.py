@@ -3,8 +3,13 @@
 
 负责管理 Frida 设备连接，支持 USB 设备、远程设备、本地设备。
 包含自动重连、连接状态监控和错误恢复机制。
+
+模拟模式：
+  当 config.MOCK_DEVICE 为 True（或环境变量 FRIDAMCP_MOCK_DEVICE=1）时，
+  使用 MockDevice 替代真实 Frida 设备，用于无设备环境下的开发/测试/CI。
 """
 
+import os
 import time
 import threading
 from typing import List, Optional, Dict, Any
@@ -13,6 +18,7 @@ import frida
 
 from ..config import config
 from ..utils.logger import logger
+from .mock_device import MockDevice, get_mock_device, is_mock_mode
 
 
 class DeviceManager:
@@ -46,6 +52,11 @@ class DeviceManager:
         Returns:
             设备列表，每个设备包含 id, name, type 信息
         """
+        # 模拟模式
+        if is_mock_mode():
+            mock = get_mock_device()
+            return [{"id": mock.id, "name": mock.name, "type": mock.type}]
+
         try:
             devices = frida.enumerate_devices()
             result = []
@@ -67,7 +78,7 @@ class DeviceManager:
         self,
         device_id: Optional[str] = None,
         device_type: Optional[str] = None,
-    ) -> frida.core.Device:
+    ):
         """获取指定设备（带重试机制）
 
         Args:
@@ -75,11 +86,21 @@ class DeviceManager:
             device_type: 设备类型 (usb/remote/local)，None 表示使用配置默认值
 
         Returns:
-            Frida Device 对象
+            Frida Device 对象（或 MockDevice）
 
         Raises:
             RuntimeError: 当所有重试均失败时
         """
+        # 模拟模式：直接返回 MockDevice
+        if is_mock_mode():
+            mock = get_mock_device()
+            self._device = mock
+            self._device_type = "mock"
+            self._device_id = mock.id
+            self._connected_at = time.time()
+            logger.info(f"[MOCK] Using mock device: {mock.name}")
+            return mock
+
         dtype = device_type or config.FRIDA_DEVICE_TYPE
         did = device_id or config.FRIDA_DEVICE_ID
 

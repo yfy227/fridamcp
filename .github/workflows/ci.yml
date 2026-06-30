@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12"]
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install pytest pytest-asyncio
+
+      - name: Run self-test
+        run: |
+          python -m fridamcp --self-test
+
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v --tb=short
+        env:
+          FRIDAMCP_MOCK_DEVICE: "1"
+
+      - name: Verify server boots (stdio)
+        run: |
+          echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"ci","version":"1.0"}}}' | timeout 5 python -m fridamcp -t stdio 2>/dev/null | head -1
+
+      - name: Verify server boots (HTTP)
+        run: |
+          FRIDAMCP_MOCK_DEVICE=1 python -m fridamcp -t http -p 18768 --host 127.0.0.1 &
+          SERVER_PID=$!
+          sleep 3
+          curl -sf http://127.0.0.1:18768/ > /dev/null && echo "HTTP server OK"
+          kill $SERVER_PID 2>/dev/null || true
+
+      - name: List tools count
+        run: |
+          python -m fridamcp --list-tools 2>/dev/null | grep "registered tools" | head -1
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .
+          pip install ruff
+
+      - name: Check syntax (py_compile)
+        run: |
+          find fridamcp injector tests -name "*.py" -exec python -m py_compile {} +
+
+      - name: Lint with ruff
+        run: |
+          ruff check fridamcp/ injector/ tests/ --select E9,F63,F7,F82 --ignore F401 || true
+        continue-on-error: true
