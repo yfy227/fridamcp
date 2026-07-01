@@ -1,0 +1,917 @@
+     1→#!/usr/bin/env python3
+     2→"""
+     3→FridaMCP GUI Application
+     4→
+     5→一键启动 FridaMCP 图形界面，无需复杂命令行参数。
+     6→提供设备管理、进程管理、Hook、内存检查、网络监控、日志查看、APK 注入等全功能可视化操作。
+     7→
+     8→用法:
+     9→    python app.py              # 启动 GUI（默认端口 7860）
+    10→    python app.py --port 8080  # 指定端口
+    11→    python app.py --mcp        # 同时启动 MCP 服务器（端口 8768）
+    12→"""
+    13→
+    14→import sys
+    15→import os
+    16→import threading
+    17→import asyncio
+    18→import time
+    19→import json
+    20→
+    21→# 确保项目根目录在 path 中
+    22→PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+    23→if PROJECT_ROOT not in sys.path:
+    24→    sys.path.insert(0, PROJECT_ROOT)
+    25→
+    26→import gradio as gr
+    27→
+    28→from fridamcp.config import config
+    29→from fridamcp.utils.logger import setup_logging, logger, get_log_buffer, clear_log_buffer
+    30→from fridamcp.core.device_manager import device_manager
+    31→from fridamcp.core.session_manager import session_manager
+    32→from fridamcp.core.frida_client import frida_client
+    33→
+    34→# MCP 服务器后台线程
+    35→_mcp_thread = None
+    36→_mcp_running = False
+    37→
+    38→
+    39→# ============================================================
+    40→# 后台 MCP 服务器管理
+    41→# ============================================================
+    42→
+    43→def start_mcp_server_background(host="0.0.0.0", port=8768, transport="sse"):
+    44→    """在后台线程启动 MCP 服务器"""
+    45→    global _mcp_thread, _mcp_running
+    46→    if _mcp_running:
+    47→        return "MCP 服务器已在运行中"
+    48→
+    49→    def _run():
+    50→        global _mcp_running
+    51→        try:
+    52→            from fridamcp.server import create_mcp_server, run_sse_server, run_streamable_http_server
+    53→            mcp = create_mcp_server()
+    54→            _mcp_running = True
+    55→            logger.info(f"MCP server starting on {host}:{port} ({transport})")
+    56→            if transport == "sse":
+    57→                asyncio.run(run_sse_server(mcp, host, port))
+    58→            elif transport == "http":
+    59→                asyncio.run(run_streamable_http_server(mcp, host, port))
+    60→        except Exception as e:
+    61→            logger.error(f"MCP server error: {e}")
+    62→        finally:
+    63→            _mcp_running = False
+    64→
+    65→    _mcp_thread = threading.Thread(target=_run, daemon=True)
+    66→    _mcp_thread.start()
+    67→    time.sleep(1)
+    68→    return f"MCP 服务器已启动: {host}:{port} ({transport})"
+    69→
+    70→
+    71→def stop_mcp_server():
+    72→    """停止 MCP 服务器"""
+    73→    global _mcp_running
+    74→    if not _mcp_running:
+    75→        return "MCP 服务器未运行"
+    76→    _mcp_running = False
+    77→    session_manager.close_all()
+    78→    return "MCP 服务器已停止（会话已清理）"
+    79→
+    80→
+    81→def get_mcp_status():
+    82→    """获取 MCP 服务器状态"""
+    83→    if _mcp_running:
+    84→        return "🟢 运行中"
+    85→    return "🔴 已停止"
+    86→
+    87→
+    88→# ============================================================
+    89→# 设备管理
+    90→# ============================================================
+    91→
+    92→def refresh_devices():
+    93→    """刷新设备列表"""
+    94→    try:
+    95→        devices = device_manager.list_devices()
+    96→        if not devices:
+    97→            return "未发现设备", gr.Dropdown(choices=[], value=None)
+    98→        choices = [f"{d['id']} ({d['name']})" for d in devices]
+    99→        return f"发现 {len(devices)} 个设备", gr.Dropdown(choices=choices, value=choices[0])
+   100→    except Exception as e:
+   101→        return f"错误: {e}", gr.Dropdown(choices=[], value=None)
+   102→
+   103→
+   104→def connect_device(device_choice, device_type):
+   105→    """连接设备"""
+   106→    try:
+   107→        device_id = None
+   108→        if device_choice:
+   109→            device_id = device_choice.split(" (")[0]
+   110→        device = device_manager.get_device(device_id, device_type)
+   111→        info = device_manager.get_device_info()
+   112→        return f"✅ 已连接: {device.name}\n{json.dumps(info, indent=2, ensure_ascii=False)}"
+   113→    except Exception as e:
+   114→        return f"❌ 连接失败: {e}"
+   115→
+   116→
+   117→def reconnect_device():
+   118→    """重连设备"""
+   119→    try:
+   120→        device = device_manager.refresh()
+   121→        return f"✅ 重连成功: {device.name}"
+   122→    except Exception as e:
+   123→        return f"❌ 重连失败: {e}"
+   124→
+   125→
+   126→def get_device_status():
+   127→    """获取设备状态"""
+   128→    return device_manager.get_status()
+   129→
+   130→
+   131→# ============================================================
+   132→# 进程管理
+   133→# ============================================================
+   134→
+   135→def list_processes():
+   136→    """列出进程"""
+   137→    try:
+   138→        procs = frida_client.list_processes()
+   139→        # 转换为 DataFrame 格式
+   140→        return procs[:200]  # 限制返回数量
+   141→    except Exception as e:
+   142→        return [{"pid": -1, "name": f"错误: {e}"}]
+   143→
+   144→
+   145→def list_apps():
+   146→    """列出应用"""
+   147→    try:
+   148→        apps = frida_client.list_applications()
+   149→        running = [a for a in apps if a.get("pid", 0) > 0]
+   150→        return apps[:200], f"共 {len(apps)} 个应用，{len(running)} 个运行中"
+   151→    except Exception as e:
+   152→        return [{"identifier": "error", "name": str(e), "pid": 0}], f"错误: {e}"
+   153→
+   154→
+   155→def spawn_app(package, paused=True):
+   156→    """启动应用"""
+   157→    try:
+   158→        result = frida_client.spawn(package, paused)
+   159→        return f"✅ 已启动: {package}\nPID: {result['pid']}\n会话ID: {result['session_id']}"
+   160→    except Exception as e:
+   161→        return f"❌ 启动失败: {e}"
+   162→
+   163→
+   164→def attach_process(target):
+   165→    """附加进程"""
+   166→    try:
+   167→        # 尝试转换为 int
+   168→        try:
+   169→            target = int(target)
+   170→        except ValueError:
+   171→            pass
+   172→        result = frida_client.attach(target)
+   173→        return f"✅ 已附加: {result['name']}\nPID: {result['pid']}\n会话ID: {result['session_id']}"
+   174→    except Exception as e:
+   175→        return f"❌ 附加失败: {e}"
+   176→
+   177→
+   178→def resume_process(pid):
+   179→    """恢复进程"""
+   180→    try:
+   181→        frida_client.resume(int(pid))
+   182→        return f"✅ 已恢复 PID {pid}"
+   183→    except Exception as e:
+   184→        return f"❌ 恢复失败: {e}"
+   185→
+   186→
+   187→def kill_process(pid):
+   188→    """杀死进程"""
+   189→    try:
+   190→        frida_client.kill(int(pid))
+   191→        return f"✅ 已杀死 PID {pid}"
+   192→    except Exception as e:
+   193→        return f"❌ 失败: {e}"
+   194→
+   195→
+   196→def list_sessions():
+   197→    """列出会话"""
+   198→    try:
+   199→        sessions = frida_client.list_sessions()
+   200→        if not sessions:
+   201→            return "无活跃会话"
+   202→        lines = []
+   203→        for s in sessions:
+   204→            lines.append(f"ID: {s['id']} | PID: {s['pid']} | 名称: {s['name']} | 脚本: {len(s['scripts'])} | Hook: {len(s['hooks'])} | 消息: {s['message_count']}")
+   205→        return "\n".join(lines)
+   206→    except Exception as e:
+   207→        return f"错误: {e}"
+   208→
+   209→
+   210→def close_session(session_id):
+   211→    """关闭会话"""
+   212→    try:
+   213→        frida_client.close_session(session_id)
+   214→        return f"✅ 已关闭会话: {session_id}"
+   215→    except Exception as e:
+   216→        return f"❌ 失败: {e}"
+   217→
+   218→
+   219→def close_all_sessions():
+   220→    """关闭所有会话"""
+   221→    try:
+   222→        count = len(session_manager.list_sessions())
+   223→        session_manager.close_all()
+   224→        return f"✅ 已关闭 {count} 个会话"
+   225→    except Exception as e:
+   226→        return f"❌ 失败: {e}"
+   227→
+   228→
+   229→# ============================================================
+   230→# Hook 管理
+   231→# ============================================================
+   232→
+   233→def hook_java_method(session_id, class_name, method_name):
+   234→    """Hook Java 方法"""
+   235→    try:
+   236→        import uuid
+   237→        from fridamcp.modules.hook import HOOK_JAVA_METHOD_TEMPLATE
+   238→        hook_id = f"hook_{uuid.uuid4().hex[:8]}"
+   239→        source = HOOK_JAVA_METHOD_TEMPLATE % {
+   240→            "hook_id": hook_id,
+   241→            "class_name": class_name,
+   242→            "method_name": method_name,
+   243→        }
+   244→        result = frida_client.execute_script(session_id, source, script_name=hook_id)
+   245→        session = session_manager.get_session(session_id)
+   246→        if session:
+   247→            session.add_hook(hook_id, {
+   248→                "type": "java_method",
+   249→                "class_name": class_name,
+   250→                "method_name": method_name,
+   251→                "script_id": result["script_id"],
+   252→            })
+   253→        return f"✅ Hook 已安装\nHook ID: {hook_id}\nScript ID: {result['script_id']}"
+   254→    except Exception as e:
+   255→        return f"❌ Hook 失败: {e}"
+   256→
+   257→
+   258→def hook_native_func(session_id, module_name, func_name, offset):
+   259→    """Hook Native 函数"""
+   260→    try:
+   261→        import uuid
+   262→        from fridamcp.modules.hook import HOOK_NATIVE_TEMPLATE
+   263→        hook_id = f"native_{uuid.uuid4().hex[:8]}"
+   264→        off = int(offset) if offset else 0
+   265→        source = HOOK_NATIVE_TEMPLATE % {
+   266→            "hook_id": hook_id,
+   267→            "module_name": module_name,
+   268→            "func_name": func_name or "",
+   269→            "offset": off,
+   270→        }
+   271→        result = frida_client.execute_script(session_id, source, script_name=hook_id)
+   272→        session = session_manager.get_session(session_id)
+   273→        if session:
+   274→            session.add_hook(hook_id, {
+   275→                "type": "native",
+   276→                "module_name": module_name,
+   277→                "func_name": func_name,
+   278→                "offset": off,
+   279→                "script_id": result["script_id"],
+   280→            })
+   281→        return f"✅ Native Hook 已安装\nHook ID: {hook_id}"
+   282→    except Exception as e:
+   283→        return f"❌ Hook 失败: {e}"
+   284→
+   285→
+   286→def get_hook_messages(session_id, clear=False):
+   287→    """获取 Hook 消息"""
+   288→    try:
+   289→        messages = frida_client.get_messages(session_id, clear=clear)
+   290→        if not messages:
+   291→            return "无消息"
+   292→        lines = []
+   293→        for m in messages[-50:]:  # 最近50条
+   294→            msg = m.get("message", {})
+   295→            mtype = msg.get("type", "unknown")
+   296→            if mtype == "hook_call":
+   297→                lines.append(f"[CALL] {msg.get('className','')}.{msg.get('methodName','')} args={msg.get('args',[])}")
+   298→            elif mtype == "hook_return":
+   299→                lines.append(f"[RET]  {msg.get('className','')}.{msg.get('methodName','')} -> {msg.get('retval','')}")
+   300→            elif mtype == "hook_attached":
+   301→                lines.append(f"[INFO] Hook attached: {msg.get('hookId','')}")
+   302→            elif mtype == "error":
+   303→                lines.append(f"[ERR]  {msg.get('message','')}")
+   304→            else:
+   305→                lines.append(f"[{mtype}] {json.dumps(msg, ensure_ascii=False)[:200]}")
+   306→        return "\n".join(lines)
+   307→    except Exception as e:
+   308→        return f"错误: {e}"
+   309→
+   310→
+   311→def list_hooks(session_id):
+   312→    """列出 Hook"""
+   313→    try:
+   314→        session = session_manager.get_session(session_id)
+   315→        if session is None:
+   316→            return "会话不存在"
+   317→        if not session.hooks:
+   318→            return "无 Hook"
+   319→        lines = []
+   320→        for hid, info in session.hooks.items():
+   321→            lines.append(f"ID: {hid} | 类型: {info.get('type','')} | 详情: {json.dumps(info, ensure_ascii=False)}")
+   322→        return "\n".join(lines)
+   323→    except Exception as e:
+   324→        return f"错误: {e}"
+   325→
+   326→
+   327→def unhook(session_id, hook_id):
+   328→    """移除 Hook"""
+   329→    try:
+   330→        session = session_manager.get_session(session_id)
+   331→        if session is None:
+   332→            return "会话不存在"
+   333→        if not hook_id:
+   334→            count = len(session.hooks)
+   335→            session.unload_all_scripts()
+   336→            session.hooks.clear()
+   337→            return f"✅ 已移除所有 Hook（{count} 个）"
+   338→        info = session.hooks.get(hook_id)
+   339→        if info:
+   340→            session.unload_script(info["script_id"])
+   341→            session.remove_hook(hook_id)
+   342→            return f"✅ 已移除 Hook: {hook_id}"
+   343→        return f"Hook 不存在: {hook_id}"
+   344→    except Exception as e:
+   345→        return f"❌ 失败: {e}"
+   346→
+   347→
+   348→# ============================================================
+   349→# 内存检查
+   350→# ============================================================
+   351→
+   352→def list_modules(session_id):
+   353→    """列出模块"""
+   354→    try:
+   355→        from fridamcp.modules.memory import LIST_MODULES_TEMPLATE
+   356→        result = frida_client.execute_script(session_id, LIST_MODULES_TEMPLATE, script_name="list_modules")
+   357→        modules = frida_client.call_script_function(session_id, result["script_id"], "list", [])
+   358→        return modules[:200] if modules else []
+   359→    except Exception as e:
+   360→        return [{"name": "error", "base": str(e), "size": 0, "path": ""}]
+   361→
+   362→
+   363→def search_memory(session_id, pattern, max_results=100):
+   364→    """搜索内存"""
+   365→    try:
+   366→        from fridamcp.modules.memory import MEMORY_SEARCH_TEMPLATE
+   367→        import uuid
+   368→        clean = pattern.replace(" ", "").replace("\\x", "")
+   369→        is_hex = all(c in "0123456789abcdefABCDEF" for c in clean) and len(clean) % 2 == 0
+   370→        if not is_hex:
+   371→            hex_pattern = " ".join(f"{ord(c):02x}" for c in pattern)
+   372→        else:
+   373→            hex_pattern = " ".join(clean[i:i+2] for i in range(0, len(clean), 2))
+   374→
+   375→        script_id = f"search_{uuid.uuid4().hex[:8]}"
+   376→        result = frida_client.execute_script(session_id, MEMORY_SEARCH_TEMPLATE, script_name=script_id)
+   377→        ret = frida_client.call_script_function(session_id, result["script_id"], "search", [hex_pattern, int(max_results)])
+   378→        return json.dumps(ret, indent=2, ensure_ascii=False)
+   379→    except Exception as e:
+   380→        return f"错误: {e}"
+   381→
+   382→
+   383→def read_memory(session_id, address, size=64):
+   384→    """读取内存"""
+   385→    try:
+   386→        from fridamcp.modules.memory import MEMORY_READ_TEMPLATE
+   387→        import uuid
+   388→        script_id = f"read_{uuid.uuid4().hex[:8]}"
+   389→        result = frida_client.execute_script(session_id, MEMORY_READ_TEMPLATE, script_name=script_id)
+   390→        ret = frida_client.call_script_function(session_id, result["script_id"], "read", [address, int(size)])
+   391→        return json.dumps(ret, indent=2, ensure_ascii=False)
+   392→    except Exception as e:
+   393→        return f"错误: {e}"
+   394→
+   395→
+   396→# ============================================================
+   397→# 网络监控
+   398→# ============================================================
+   399→
+   400→_network_capturing = False
+   401→
+   402→def start_network_capture(session_id, capture_ssl=True):
+   403→    """开始网络捕获"""
+   404→    global _network_capturing
+   405→    try:
+   406→        from fridamcp.modules.network import SSL_HOOK_TEMPLATE, _capture_buffer, _capture_active
+   407→        import uuid
+   408→        _capture_buffer.clear()
+   409→        _capture_active[session_id] = True
+   410→        _network_capturing = True
+   411→
+   412→        if capture_ssl:
+   413→            hook_id = f"ssl_{uuid.uuid4().hex[:8]}"
+   414→            source = SSL_HOOK_TEMPLATE % {"hook_id": hook_id}
+   415→            frida_client.execute_script(session_id, source, script_name=hook_id)
+   416→
+   417→        return f"✅ 网络捕获已启动 (SSL={'开' if capture_ssl else '关'})"
+   418→    except Exception as e:
+   419→        return f"❌ 失败: {e}"
+   420→
+   421→
+   422→def stop_network_capture(session_id):
+   423→    """停止网络捕获"""
+   424→    global _network_capturing
+   425→    try:
+   426→        from fridamcp.modules.network import _capture_active
+   427→        _capture_active.pop(session_id, None)
+   428→        _network_capturing = False
+   429→        return "✅ 网络捕获已停止"
+   430→    except Exception as e:
+   431→        return f"❌ 失败: {e}"
+   432→
+   433→
+   434→def get_network_capture(session_id, clear=False):
+   435→    """获取网络捕获"""
+   436→    try:
+   437→        from fridamcp.modules.network import _capture_buffer
+   438→        items = list(_capture_buffer)
+   439→        if clear:
+   440→            _capture_buffer.clear()
+   441→        if not items:
+   442→            return "无捕获数据"
+   443→        lines = []
+   444→        for item in items[-100:]:
+   445→            t = item.get("type", "")
+   446→            data = item.get("data", "")
+   447→            if len(data) > 200:
+   448→                data = data[:200] + "..."
+   449→            ip = item.get("ip", "")
+   450→            port = item.get("port", "")
+   451→            size = item.get("size", "")
+   452→            if t == "ssl_write":
+   453→                lines.append(f"[SSL→] {size}B: {data}")
+   454→            elif t == "ssl_read":
+   455→                lines.append(f"[SSL←] {size}B: {data}")
+   456→            elif t == "socket_connect":
+   457→                lines.append(f"[CONN] {ip}:{port}")
+   458→            elif t == "socket_send":
+   459→                lines.append(f"[SEND] {size}B: {data}")
+   460→            else:
+   461→                lines.append(f"[{t}] {data}")
+   462→        return "\n".join(lines)
+   463→    except Exception as e:
+   464→        return f"错误: {e}"
+   465→
+   466→
+   467→# ============================================================
+   468→# 日志查看
+   469→# ============================================================
+   470→
+   471→def get_server_logs(max_entries=100):
+   472→    """获取服务器日志"""
+   473→    try:
+   474→        buf = get_log_buffer()
+   475→        entries = list(buf)[-max_entries:]
+   476→        lines = []
+   477→        for e in entries:
+   478→            time_obj = e.get("time")
+   479→            level_obj = e.get("level")
+   480→            time_str = time_obj.isoformat() if hasattr(time_obj, "isoformat") else str(time_obj)
+   481→            level_str = level_obj.name if hasattr(level_obj, "name") else str(level_obj)
+   482→            msg = e.get("message", "")
+   483→            lines.append(f"[{time_str}] {level_str}: {msg}")
+   484→        return "\n".join(lines) if lines else "无日志"
+   485→    except Exception as e:
+   486→        return f"错误: {e}"
+   487→
+   488→
+   489→def clear_logs():
+   490→    """清空日志"""
+   491→    clear_log_buffer()
+   492→    return "日志已清空"
+   493→
+   494→
+   495→def get_frida_messages(session_id, clear=False):
+   496→    """获取 Frida 消息"""
+   497→    try:
+   498→        messages = frida_client.get_messages(session_id, clear=clear)
+   499→        if not messages:
+   500→            return "无消息"
+   501→        lines = []
+   502→        for m in messages[-100:]:
+   503→            msg = m.get("message", {})
+   504→            lines.append(json.dumps(msg, ensure_ascii=False)[:300])
+   505→        return "\n".join(lines)
+   506→    except Exception as e:
+   507→        return f"错误: {e}"
+   508→
+   509→
+   510→# ============================================================
+   511→# APK 注入器
+   512→# ============================================================
+   513→
+   514→def inject_apk(input_apk, output_apk, arch, use_apktool, application_class):
+   515→    """注入 APK"""
+   516→    try:
+   517→        from fridamcp.utils.apk_injector import inject_gadget, inject_with_apktool
+   518→        if not input_apk:
+   519→            return "❌ 请选择输入 APK"
+   520→        if not output_apk:
+   521→            output_apk = input_apk.replace(".apk", "_injected.apk")
+   522→
+   523→        if use_apktool:
+   524→            result = inject_with_apktool(input_apk, output_apk, arch=arch or None, application_class=application_class or None)
+   525→        else:
+   526→            result = inject_gadget(input_apk, output_apk, arch=arch or None)
+   527→
+   528→        if result.get("success"):
+   529→            return f"✅ 注入成功!\n输出: {result.get('output_apk', output_apk)}\n架构: {result.get('archs', [])}"
+   530→        else:
+   531→            return f"❌ 注入失败: {result.get('error', '未知错误')}\n{result.get('detail','')}\n{result.get('note','')}"
+   532→    except Exception as e:
+   533→        return f"❌ 错误: {e}"
+   534→
+   535→
+   536→# ============================================================
+   537→# 构建 GUI 界面
+   538→# ============================================================
+   539→
+   540→def create_app():
+   541→    """创建 Gradio 应用"""
+   542→    with gr.Blocks(
+   543→        title="FridaMCP - Android Frida 动态分析平台",
+   544→        theme=gr.themes.Soft(),
+   545→        css="""
+   546→        .header { text-align: center; margin-bottom: 20px; }
+   547→        .status-box { padding: 10px; border-radius: 8px; }
+   548→        """
+   549→    ) as app:
+   550→
+   551→        # ===== 标题栏 =====
+   552→        gr.HTML("""
+   553→        <div class="header">
+   554→            <h1>🔧 FridaMCP - Android Frida 动态分析平台</h1>
+   555→            <p>AI-Powered Frida MCP Server | 端口 8768 | GUI 端口 7860</p>
+   556→        </div>
+   557→        """)
+   558→
+   559→        with gr.Tabs():
+   560→
+   561→            # ===== Tab 1: 仪表盘 =====
+   562→            with gr.Tab("📊 仪表盘"):
+   563→                with gr.Row():
+   564→                    with gr.Column(scale=1):
+   565→                        gr.Markdown("### MCP 服务器")
+   566→                        mcp_status_display = gr.Textbox(label="MCP 状态", value=get_mcp_status(), interactive=False)
+   567→                        with gr.Row():
+   568→                            btn_start_mcp = gr.Button("启动 MCP", variant="primary")
+   569→                            btn_stop_mcp = gr.Button("停止 MCP", variant="stop")
+   570→                        mcp_result = gr.Textbox(label="操作结果", interactive=False)
+   571→
+   572→                    with gr.Column(scale=1):
+   573→                        gr.Markdown("### 设备状态")
+   574→                        device_status_display = gr.JSON(label="设备状态", value=get_device_status)
+   575→                        btn_refresh_status = gr.Button("刷新状态")
+   576→
+   577→                    with gr.Column(scale=1):
+   578→                        gr.Markdown("### 会话状态")
+   579→                        session_status_display = gr.JSON(label="会话状态", value=session_manager.get_status)
+   580→                        btn_refresh_session = gr.Button("刷新会话")
+   581→
+   582→                with gr.Row():
+   583→                    gr.Markdown("### 快速操作")
+   584→                with gr.Row():
+   585→                    btn_close_all = gr.Button("关闭所有会话", variant="stop")
+   586→                    btn_reconnect = gr.Button("重连设备")
+   587→                    quick_result = gr.Textbox(label="结果", interactive=False)
+   588→
+   589→                btn_start_mcp.click(fn=lambda: start_mcp_server_background(), outputs=mcp_result)
+   590→                btn_stop_mcp.click(fn=stop_mcp_server, outputs=mcp_result)
+   591→                btn_refresh_status.click(fn=get_device_status, outputs=device_status_display)
+   592→                btn_refresh_session.click(fn=session_manager.get_status, outputs=session_status_display)
+   593→                btn_close_all.click(fn=close_all_sessions, outputs=quick_result)
+   594→                btn_reconnect.click(fn=reconnect_device, outputs=quick_result)
+   595→
+   596→            # ===== Tab 2: 设备 & 进程 =====
+   597→            with gr.Tab("📱 设备 & 进程"):
+   598→                with gr.Row():
+   599→                    with gr.Column(scale=1):
+   600→                        gr.Markdown("### 设备管理")
+   601→                        device_count = gr.Textbox(label="设备数量", interactive=False)
+   602→                        device_dropdown = gr.Dropdown(label="选择设备", choices=[])
+   603→                        device_type_radio = gr.Radio(["usb", "remote", "local"], label="设备类型", value="usb")
+   604→                        with gr.Row():
+   605→                            btn_refresh_dev = gr.Button("刷新设备")
+   606→                            btn_connect_dev = gr.Button("连接", variant="primary")
+   607→                            btn_reconnect_dev = gr.Button("重连")
+   608→                        device_info = gr.Textbox(label="设备信息", lines=8, interactive=False)
+   609→
+   610→                    with gr.Column(scale=2):
+   611→                        gr.Markdown("### 进程管理")
+   612→                        with gr.Tab("进程列表"):
+   613→                            process_df = gr.Dataframe(
+   614→                                headers=["pid", "name"],
+   615→                                label="进程列表（前200个）",
+   616→                                value=list_processes,
+   617→                                interactive=False,
+   618→                            )
+   619→                            btn_refresh_proc = gr.Button("刷新进程")
+   620→                            btn_refresh_proc.click(fn=list_processes, outputs=process_df)
+   621→
+   622→                        with gr.Tab("应用列表"):
+   623→                            app_df = gr.Dataframe(
+   624→                                headers=["identifier", "name", "pid"],
+   625→                                label="应用列表",
+   626→                                interactive=False,
+   627→                            )
+   628→                            app_count = gr.Textbox(label="统计", interactive=False)
+   629→                            btn_refresh_apps = gr.Button("刷新应用")
+   630→                            btn_refresh_apps.click(fn=list_apps, outputs=[app_df, app_count])
+   631→
+   632→                        with gr.Tab("启动/附加"):
+   633→                            with gr.Row():
+   634→                                spawn_package = gr.Textbox(label="包名", placeholder="com.example.app")
+   635→                                btn_spawn = gr.Button("Spawn", variant="primary")
+   636→                                spawn_paused = gr.Checkbox(label="暂停启动", value=True)
+   637→                            with gr.Row():
+   638→                                attach_target = gr.Textbox(label="PID 或包名", placeholder="1234 或 com.example.app")
+   639→                                btn_attach = gr.Button("Attach", variant="primary")
+   640→                            with gr.Row():
+   641→                                resume_pid = gr.Textbox(label="PID", placeholder="恢复进程")
+   642→                                btn_resume = gr.Button("Resume")
+   643→                                kill_pid = gr.Textbox(label="PID", placeholder="杀死进程")
+   644→                                btn_kill = gr.Button("Kill", variant="stop")
+   645→                            proc_result = gr.Textbox(label="操作结果", lines=4, interactive=False)
+   646→
+   647→                btn_refresh_dev.click(fn=refresh_devices, outputs=[device_count, device_dropdown])
+   648→                btn_connect_dev.click(fn=connect_device, inputs=[device_dropdown, device_type_radio], outputs=device_info)
+   649→                btn_reconnect_dev.click(fn=reconnect_device, outputs=device_info)
+   650→                btn_spawn.click(fn=spawn_app, inputs=[spawn_package, spawn_paused], outputs=proc_result)
+   651→                btn_attach.click(fn=attach_process, inputs=attach_target, outputs=proc_result)
+   652→                btn_resume.click(fn=resume_process, inputs=resume_pid, outputs=proc_result)
+   653→                btn_kill.click(fn=kill_process, inputs=kill_pid, outputs=proc_result)
+   654→
+   655→            # ===== Tab 3: 会话管理 =====
+   656→            with gr.Tab("🔗 会话管理"):
+   657→                with gr.Row():
+   658→                    with gr.Column(scale=2):
+   659→                        session_display = gr.Textbox(label="活跃会话", lines=12, interactive=False, value=list_sessions)
+   660→                        with gr.Row():
+   661→                            btn_refresh_sessions = gr.Button("刷新")
+   662→                            btn_close_all_sess = gr.Button("关闭所有", variant="stop")
+   663→                        session_result = gr.Textbox(label="操作结果", interactive=False)
+   664→                    with gr.Column(scale=1):
+   665→                        gr.Markdown("### 关闭会话")
+   666→                        close_session_id = gr.Textbox(label="会话 ID", placeholder="sess_xxxx")
+   667→                        btn_close_session = gr.Button("关闭会话")
+   668→
+   669→                btn_refresh_sessions.click(fn=list_sessions, outputs=session_display)
+   670→                btn_close_all_sess.click(fn=close_all_sessions, outputs=session_result)
+   671→                btn_close_session.click(fn=close_session, inputs=close_session_id, outputs=session_result)
+   672→
+   673→            # ===== Tab 4: Hook 管理 =====
+   674→            with gr.Tab("🎣 Hook 管理"):
+   675→                with gr.Row():
+   676→                    with gr.Column(scale=1):
+   677→                        gr.Markdown("### Java 方法 Hook")
+   678→                        hook_session = gr.Textbox(label="会话 ID", placeholder="sess_xxxx")
+   679→                        hook_class = gr.Textbox(label="类名", placeholder="com.example.app.LoginActivity")
+   680→                        hook_method = gr.Textbox(label="方法名", placeholder="checkPassword")
+   681→                        btn_hook_java = gr.Button("安装 Hook", variant="primary")
+   682→                        hook_result = gr.Textbox(label="结果", lines=3, interactive=False)
+   683→
+   684→                    with gr.Column(scale=1):
+   685→                        gr.Markdown("### Native 函数 Hook")
+   686→                        native_module = gr.Textbox(label="模块名", placeholder="libnative.so")
+   687→                        native_func = gr.Textbox(label="函数名（可选）", placeholder="Java_com_example_NativeMethod")
+   688→                        native_offset = gr.Textbox(label="偏移量（可选）", placeholder="0")
+   689→                        btn_hook_native = gr.Button("安装 Native Hook", variant="primary")
+   690→                        native_result = gr.Textbox(label="结果", lines=3, interactive=False)
+   691→
+   692→                with gr.Row():
+   693→                    with gr.Column(scale=1):
+   694→                        gr.Markdown("### Hook 列表 & 管理")
+   695→                        hooks_display = gr.Textbox(label="已安装 Hook", lines=8, interactive=False)
+   696→                        with gr.Row():
+   697→                            btn_list_hooks = gr.Button("列出 Hook")
+   698→                            unhook_id = gr.Textbox(label="Hook ID（留空移除全部）")
+   699→                            btn_unhook = gr.Button("移除 Hook", variant="stop")
+   700→
+   701→                    with gr.Column(scale=1):
+   702→                        gr.Markdown("### Hook 消息")
+   703→                        hook_msgs = gr.Textbox(label="捕获消息", lines=12, interactive=False)
+   704→                        with gr.Row():
+   705→                            btn_get_hook_msgs = gr.Button("获取消息")
+   706→                            btn_clear_hook_msgs = gr.Button("获取并清空")
+   707→
+   708→                btn_hook_java.click(fn=hook_java_method, inputs=[hook_session, hook_class, hook_method], outputs=hook_result)
+   709→                btn_hook_native.click(fn=hook_native_func, inputs=[hook_session, native_module, native_func, native_offset], outputs=native_result)
+   710→                btn_list_hooks.click(fn=list_hooks, inputs=hook_session, outputs=hooks_display)
+   711→                btn_unhook.click(fn=unhook, inputs=[hook_session, unhook_id], outputs=hook_result)
+   712→                btn_get_hook_msgs.click(fn=get_hook_messages, inputs=[hook_session, gr.State(False)], outputs=hook_msgs)
+   713→                btn_clear_hook_msgs.click(fn=get_hook_messages, inputs=[hook_session, gr.State(True)], outputs=hook_msgs)
+   714→
+   715→            # ===== Tab 5: 内存检查 =====
+   716→            with gr.Tab("🧠 内存检查"):
+   717→                with gr.Row():
+   718→                    with gr.Column(scale=1):
+   719→                        gr.Markdown("### 模块列表")
+   720→                        mem_session = gr.Textbox(label="会话 ID", placeholder="sess_xxxx")
+   721→                        btn_list_modules = gr.Button("列出模块")
+   722→                        modules_df = gr.Dataframe(
+   723→                            headers=["name", "base", "size", "path"],
+   724→                            label="已加载模块",
+   725→                            interactive=False,
+   726→                        )
+   727→
+   728→                    with gr.Column(scale=1):
+   729→                        gr.Markdown("### 内存搜索")
+   730→                        search_pattern = gr.Textbox(label="搜索模式", placeholder="password 或 48 65 6c 6c 6f")
+   731→                        search_max = gr.Slider(10, 500, value=100, label="最大结果数")
+   732→                        btn_search_mem = gr.Button("搜索", variant="primary")
+   733→                        search_result = gr.Textbox(label="搜索结果", lines=8, interactive=False)
+   734→
+   735→                with gr.Row():
+   736→                    with gr.Column():
+   737→                        gr.Markdown("### 内存读取")
+   738→                        with gr.Row():
+   739→                            read_addr = gr.Textbox(label="地址", placeholder="0x12345678")
+   740→                            read_size = gr.Slider(16, 4096, value=64, label="读取大小")
+   741→                        btn_read_mem = gr.Button("读取", variant="primary")
+   742→                        read_result = gr.Textbox(label="读取结果", lines=6, interactive=False)
+   743→
+   744→                btn_list_modules.click(fn=list_modules, inputs=mem_session, outputs=modules_df)
+   745→                btn_search_mem.click(fn=search_memory, inputs=[mem_session, search_pattern, search_max], outputs=search_result)
+   746→                btn_read_mem.click(fn=read_memory, inputs=[mem_session, read_addr, read_size], outputs=read_result)
+   747→
+   748→            # ===== Tab 6: 网络监控 =====
+   749→            with gr.Tab("🌐 网络监控"):
+   750→                gr.Markdown("### 网络流量捕获")
+   751→                net_session = gr.Textbox(label="会话 ID", placeholder="sess_xxxx")
+   752→                with gr.Row():
+   753→                    net_ssl = gr.Checkbox(label="捕获 SSL/HTTPS 明文", value=True)
+   754→                    btn_net_start = gr.Button("开始捕获", variant="primary")
+   755→                    btn_net_stop = gr.Button("停止捕获", variant="stop")
+   756→                    btn_net_get = gr.Button("获取数据")
+   757→                    btn_net_clear = gr.Button("获取并清空")
+   758→                net_result = gr.Textbox(label="操作结果", interactive=False)
+   759→                net_data = gr.Textbox(label="捕获数据", lines=15, interactive=False)
+   760→
+   761→                btn_net_start.click(fn=start_network_capture, inputs=[net_session, net_ssl], outputs=net_result)
+   762→                btn_net_stop.click(fn=stop_network_capture, inputs=net_session, outputs=net_result)
+   763→                btn_net_get.click(fn=get_network_capture, inputs=[net_session, gr.State(False)], outputs=net_data)
+   764→                btn_net_clear.click(fn=get_network_capture, inputs=[net_session, gr.State(True)], outputs=net_data)
+   765→
+   766→            # ===== Tab 7: 日志查看 =====
+   767→            with gr.Tab("📋 日志"):
+   768→                with gr.Tabs():
+   769→                    with gr.Tab("服务器日志"):
+   770→                        with gr.Row():
+   771→                            btn_get_logs = gr.Button("刷新日志")
+   772→                            btn_clear_logs = gr.Button("清空日志", variant="stop")
+   773→                        log_display = gr.Textbox(label="服务器日志", lines=20, interactive=False)
+   774→                        btn_get_logs.click(fn=get_server_logs, outputs=log_display)
+   775→                        btn_clear_logs.click(fn=clear_logs, outputs=log_display)
+   776→
+   777→                    with gr.Tab("Frida 消息"):
+   778→                        frida_msg_session = gr.Textbox(label="会话 ID", placeholder="sess_xxxx")
+   779→                        with gr.Row():
+   780→                            btn_get_frida_msgs = gr.Button("获取消息")
+   781→                            btn_clear_frida_msgs = gr.Button("获取并清空")
+   782→                        frida_msg_display = gr.Textbox(label="Frida 消息", lines=20, interactive=False)
+   783→                        btn_get_frida_msgs.click(fn=get_frida_messages, inputs=[frida_msg_session, gr.State(False)], outputs=frida_msg_display)
+   784→                        btn_clear_frida_msgs.click(fn=get_frida_messages, inputs=[frida_msg_session, gr.State(True)], outputs=frida_msg_display)
+   785→
+   786→            # ===== Tab 8: APK 注入器 =====
+   787→            with gr.Tab("💉 APK 注入器"):
+   788→                gr.Markdown("### Frida-Gadget APK 注入（无需 Root）")
+   789→                with gr.Row():
+   790→                    with gr.Column(scale=1):
+   791→                        inject_input = gr.Textbox(label="输入 APK 路径", placeholder="/path/to/app.apk")
+   792→                        inject_output = gr.Textbox(label="输出 APK 路径（留空自动）", placeholder="/path/to/app_injected.apk")
+   793→                        inject_arch = gr.Textbox(label="架构（留空自动）", placeholder="arm64-v8a")
+   794→                        inject_apktool = gr.Checkbox(label="使用 apktool（完整注入，推荐）", value=True)
+   795→                        inject_app_class = gr.Textbox(label="Application 类名（可选）", placeholder="com.example.app.MyApplication")
+   796→                        btn_inject = gr.Button("开始注入", variant="primary")
+   797→
+   798→                    with gr.Column(scale=1):
+   799→                        inject_result = gr.Textbox(label="注入结果", lines=10, interactive=False)
+   800→                        gr.Markdown("""
+   801→                        ### 使用说明
+   802→                        1. 下载 frida-gadget 放入 `injector/frida_gadget/` 目录
+   803→                        2. 选择输入 APK
+   804→                        3. 勾选 apktool 进行完整注入
+   805→                        4. 注入后安装 APK: `adb install app_injected.apk`
+   806→                        5. 启动应用，frida-gadget 自动加载
+   807→                        6. 连接: `frida -U Gadget`
+   808→                        """)
+   809→
+   810→                btn_inject.click(fn=inject_apk, inputs=[inject_input, inject_output, inject_arch, inject_apktool, inject_app_class], outputs=inject_result)
+   811→
+   812→            # ===== Tab 9: 设置 =====
+   813→            with gr.Tab("⚙️ 设置"):
+   814→                gr.Markdown("### 配置信息")
+   815→                config_display = gr.JSON(label="当前配置", value={
+   816→                    "MCP_HOST": config.MCP_HOST,
+   817→                    "MCP_PORT": config.MCP_PORT,
+   818→                    "FRIDA_DEVICE_TYPE": config.FRIDA_DEVICE_TYPE,
+   819→                    "FRIDA_DEVICE_ID": config.FRIDA_DEVICE_ID,
+   820→                    "MAX_SESSIONS": config.MAX_SESSIONS,
+   821→                    "SCRIPT_TIMEOUT": config.SCRIPT_TIMEOUT,
+   822→                    "LOG_LEVEL": config.LOG_LEVEL,
+   823→                    "DEVICE_RECONNECT_MAX_RETRIES": config.DEVICE_RECONNECT_MAX_RETRIES,
+   824→                    "SESSION_KEEPALIVE_INTERVAL": config.SESSION_KEEPALIVE_INTERVAL,
+   825→                    "SERVER_AUTO_RESTART_MAX": config.SERVER_AUTO_RESTART_MAX,
+   826→                })
+   827→                gr.Markdown("""
+   828→                ### 环境变量配置
+   829→
+   830→                | 变量 | 默认值 | 说明 |
+   831→                |------|--------|------|
+   832→                | FRIDAMCP_HOST | 0.0.0.0 | GUI 监听地址 |
+   833→                | FRIDAMCP_PORT | 8768 | MCP 服务器端口 |
+   834→                | FRIDA_DEVICE_TYPE | usb | 设备类型 |
+   835→                | FRIDA_DEVICE_ID | (空) | 设备 ID |
+   836→                | FRIDAMCP_LOG_LEVEL | INFO | 日志级别 |
+   837→                | FRIDAMCP_MAX_SESSIONS | 10 | 最大会话数 |
+   838→                | FRIDAMCP_RECONNECT_RETRIES | 5 | 设备重连次数 |
+   839→                | FRIDAMCP_KEEPALIVE_INTERVAL | 30 | 会话保活间隔 |
+   840→                | FRIDAMCP_AUTO_RESTART_MAX | 3 | 服务器自动重启次数 |
+   841→
+   842→                ### 启动方式
+   843→                - **GUI 模式**: `python app.py`
+   844→                - **GUI + MCP**: `python app.py --mcp`
+   845→                - **仅 MCP**: `python -m fridamcp.server --transport sse`
+   846→                - **stdio 模式**: `python -m fridamcp.server --transport stdio`
+   847→                """)
+   848→
+   849→    return app
+   850→
+   851→
+   852→# ============================================================
+   853→# 主入口
+   854→# ============================================================
+   855→
+   856→def main():
+   857→    """主入口"""
+   858→    import argparse
+   859→
+   860→    parser = argparse.ArgumentParser(
+   861→        description="FridaMCP GUI - Android Frida 动态分析平台"
+   862→    )
+   863→    parser.add_argument(
+   864→        "--host", default="0.0.0.0",
+   865→        help="GUI 监听地址（默认 0.0.0.0）",
+   866→    )
+   867→    parser.add_argument(
+   868→        "--port", "-p", type=int, default=7860,
+   869→        help="GUI 监听端口（默认 7860）",
+   870→    )
+   871→    parser.add_argument(
+   872→        "--mcp", action="store_true",
+   873→        help="同时启动 MCP 服务器（端口 8768）",
+   874→    )
+   875→    parser.add_argument(
+   876→        "--mcp-port", type=int, default=8768,
+   877→        help="MCP 服务器端口（默认 8768）",
+   878→    )
+   879→    parser.add_argument(
+   880→        "--device-type", default="usb",
+   881→        choices=["usb", "remote", "local"],
+   882→        help="Frida 设备类型（默认 usb）",
+   883→    )
+   884→
+   885→    args = parser.parse_args()
+   886→
+   887→    # 设置环境变量
+   888→    os.environ["FRIDA_DEVICE_TYPE"] = args.device_type
+   889→
+   890→    # 初始化日志
+   891→    setup_logging()
+   892→
+   893→    logger.info("=" * 60)
+   894→    logger.info("FridaMCP GUI - Android Frida 动态分析平台")
+   895→    logger.info("=" * 60)
+   896→    logger.info(f"GUI: http://0.0.0.0:{args.port}")
+   897→    if args.mcp:
+   898→        logger.info(f"MCP: http://0.0.0.0:{args.mcp_port}")
+   899→    logger.info("=" * 60)
+   900→
+   901→    # 如果需要，启动 MCP 服务器
+   902→    if args.mcp:
+   903→        start_mcp_server_background(port=args.mcp_port)
+   904→
+   905→    # 启动 GUI
+   906→    app = create_app()
+   907→    app.launch(
+   908→        server_name=args.host,
+   909→        server_port=args.port,
+   910→        share=False,
+   911→        inbrowser=True,
+   912→    )
+   913→
+   914→
+   915→if __name__ == "__main__":
+   916→    main()
+   917→
