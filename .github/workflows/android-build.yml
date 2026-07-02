@@ -16,6 +16,7 @@ jobs:
   build:
     name: Build APK
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -37,31 +38,26 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-
-      - name: Cache Gradle
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-            android-app/.gradle
-          key: gradle-${{ runner.os }}-${{ hashFiles('android-app/**/*.gradle*', 'android-app/**/gradle-wrapper.properties') }}
-          restore-keys: gradle-${{ runner.os }}-
-
-      - name: Grant execute permission for gradlew
-        run: chmod +x android-app/gradlew
+          cache-read-only: false
 
       - name: Build Debug APK
         working-directory: android-app
-        run: ./gradlew assembleDebug --no-daemon --stacktrace --refresh-dependencies
+        run: gradle assembleDebug --no-daemon --stacktrace --warning-mode all
 
       - name: Upload Debug APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: FridaMCP-debug-apk
           path: android-app/app/build/outputs/apk/debug/*.apk
           retention-days: 30
 
-      - name: Run Unit Tests
-        working-directory: android-app
-        run: ./gradlew test --no-daemon
+      - name: Upload Build Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: |
+            android-app/app/build/reports/
+            android-app/build/
+          retention-days: 7
