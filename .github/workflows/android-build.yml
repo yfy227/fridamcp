@@ -33,6 +33,11 @@ jobs:
           api-level: 34
           build-tools-version: '34.0.0'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
       - name: Cache Gradle
         uses: actions/cache@v4
         with:
@@ -48,26 +53,13 @@ jobs:
 
       - name: Build Debug APK
         working-directory: android-app
-        run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
-
-      - name: Build Release APK
-        working-directory: android-app
-        run: |
-          ./gradlew assembleRelease --no-daemon --stacktrace
+        run: ./gradlew assembleDebug --no-daemon --stacktrace --refresh-dependencies
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: FridaMCP-debug-apk
           path: android-app/app/build/outputs/apk/debug/*.apk
-          retention-days: 30
-
-      - name: Upload Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: FridaMCP-release-apk
-          path: android-app/app/build/outputs/apk/release/*.apk
           retention-days: 30
 
       - name: Run Unit Tests
