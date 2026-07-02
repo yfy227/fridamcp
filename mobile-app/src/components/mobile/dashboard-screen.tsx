@@ -207,20 +207,37 @@ export function DashboardScreen({
       </section>
 
       {/* 活跃会话 */}
-      {sessions.length > 0 && (
-        <section className="rounded-2xl bg-card border border-border p-4 space-y-3">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <Activity className="w-4 h-4 text-primary" />
-              活跃会话
-            </h2>
+      <section className="rounded-2xl bg-card border border-border p-4 space-y-3">
+        <div className="flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <Activity className="w-4 h-4 text-primary" />
+            活跃会话
+            {sessions.length > 0 && (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-primary/15 text-primary">
+                {sessions.length}
+              </span>
+            )}
+          </h2>
+          {sessions.length > 0 && (
             <button
               onClick={onNavigateMCP}
               className="text-xs text-primary font-medium hover:underline"
             >
               全部
             </button>
-          </div>
+          )}
+        </div>
+
+        {sessions.length === 0 ? (
+          <button
+            onClick={onNavigateApps}
+            className="w-full flex flex-col items-center justify-center py-6 text-center hover:bg-muted/30 rounded-xl transition-colors"
+          >
+            <Activity className="w-7 h-7 text-muted-foreground/40 mb-2" />
+            <p className="text-xs text-muted-foreground">暂无活跃会话</p>
+            <p className="text-[10px] text-muted-foreground/70 mt-0.5">前往应用列表拉起 MCP 服务</p>
+          </button>
+        ) : (
           <div className="space-y-2">
             {sessions.slice(0, 3).map((session) => (
               <div key={session.id} className="flex items-center gap-3 p-2.5 rounded-xl bg-muted/40">
@@ -241,8 +258,8 @@ export function DashboardScreen({
               </div>
             ))}
           </div>
-        </section>
-      )}
+        )}
+      </section>
 
       {/* 快捷操作 */}
       <section className="grid grid-cols-2 gap-3">

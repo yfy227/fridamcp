@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { StatusBar } from "@/components/mobile/status-bar";
 import { BottomNav } from "@/components/mobile/bottom-nav";
 import { DashboardScreen } from "@/components/mobile/dashboard-screen";
@@ -9,16 +9,15 @@ import { InjectScreen } from "@/components/mobile/inject-screen";
 import { MCPScreen } from "@/components/mobile/mcp-screen";
 import { SettingsScreen } from "@/components/mobile/settings-screen";
 import { AppDetailSheet } from "@/components/mobile/app-detail-sheet";
+import { ToastContainer, useToast } from "@/components/mobile/toast";
 import {
   mockDevice,
   mockMCPServer,
   mockApps,
-  mockSessions,
   mockModules,
-  mockLogs,
   mockInjectionTasks,
 } from "@/lib/mock-data";
-import type { TabId, AppInfo, InjectionTask, MCPServerStatus } from "@/lib/types";
+import type { TabId, AppInfo, InjectionTask, MCPServerStatus, MCPSession } from "@/lib/types";
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
@@ -27,16 +26,28 @@ export default function HomePage() {
   const [selectedApp, setSelectedApp] = useState<AppInfo | null>(null);
   const [mcpServer, setMcpServer] = useState<MCPServerStatus>(mockMCPServer);
   const [tasks, setTasks] = useState<InjectionTask[]>(mockInjectionTasks);
-  const [toast, setToast] = useState<{ msg: string; type: "success" | "error" | "info" } | null>(null);
+  const { toasts, showToast, dismiss } = useToast();
 
   const injectedCount = apps.filter(
     (a) => a.injectionStatus === "injected" || a.injectionStatus === "running"
   ).length;
 
-  const showToast = useCallback((msg: string, type: "success" | "error" | "info" = "info") => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 2500);
-  }, []);
+  // 动态生成会话列表：基于正在运行且 MCP 在线的应用
+  const dynamicSessions: MCPSession[] = useMemo(() => {
+    return apps
+      .filter((a) => a.injectionStatus === "running" && a.mcpStatus === "online")
+      .map((a, i) => ({
+        id: `sess-${a.id}`,
+        pid: a.pid || 0,
+        appName: a.appName,
+        packageName: a.packageName,
+        state: "attached" as const,
+        createdAt: a.injectedAt || Date.now(),
+        scriptCount: 1 + i,
+        hookCount: Math.floor(Math.random() * 8) + 1,
+        messageCount: Math.floor(Math.random() * 120),
+      }));
+  }, [apps]);
 
   // 扫描已注入应用
   const handleScan = useCallback(() => {
@@ -256,7 +267,7 @@ export default function HomePage() {
               device={mockDevice}
               mcpServer={mcpServer}
               apps={apps}
-              sessions={mockSessions}
+              sessions={dynamicSessions}
               onRefresh={handleScan}
               onToggleMCPServer={handleToggleMCPServer}
               onNavigateApps={() => setActiveTab("apps")}
@@ -279,7 +290,7 @@ export default function HomePage() {
           {activeTab === "mcp" && (
             <MCPScreen
               server={mcpServer}
-              sessions={mockSessions}
+              sessions={dynamicSessions}
               modules={mockModules}
               onToggleServer={handleToggleMCPServer}
             />
@@ -304,18 +315,8 @@ export default function HomePage() {
           onRemoveInjection={handleRemoveInjection}
         />
 
-        {/* Toast 提示 */}
-        {toast && (
-          <div className="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 fade-in">
-            <div className={`px-4 py-2.5 rounded-xl text-xs font-medium shadow-lg ${
-              toast.type === "success" ? "bg-primary text-primary-foreground" :
-              toast.type === "error" ? "bg-destructive text-white" :
-              "bg-card border border-border text-foreground"
-            }`}>
-              {toast.msg}
-            </div>
-          </div>
-        )}
+        {/* Toast 通知 */}
+        <ToastContainer toasts={toasts} onDismiss={dismiss} />
       </div>
     </div>
   );
