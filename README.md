@@ -9,11 +9,12 @@
 
 ## 项目简介
 
-**FridaMCP** 是一个将 Frida 动态插桩工具与 MCP 协议结合的项目，专为 AI 辅助的 Android 应用安全分析而设计。它包含三个核心组件：
+**FridaMCP** 是一个将 Frida 动态插桩工具与 MCP 协议结合的项目，专为 AI 辅助的 Android 应用安全分析而设计。它包含四个核心组件：
 
 1. **Android 端 Frida 运行器** —— 在 Android 设备上启动 `frida-server`，提供 Frida 运行环境。
 2. **APK 注入器** —— 将 `frida-gadget` 自动注入到目标 APK 中，使目标应用启动时自动加载 Frida，无需 root 也能使用。
 3. **MCP 服务器** —— 监听端口 `8768`，向 AI 客户端暴露一系列 Frida 操作工具，让 AI 可以直接调用 Frida 进行安全分析。
+4. **移动端 APP** —— jshook 风格的移动端 UI，提供应用注入管理、注入状态自动检测、MCP 服务一键拉起等可视化操作（详见 [`mobile-app/`](mobile-app/)）。
 
 ## 工作流程
 
@@ -39,6 +40,8 @@
 
 - **8 个 MCP 模块**：进程管理、Hook 管理、内存检查、网络监控、文件系统、UI 自动化、加密分析、日志捕获
 - **APK 注入器**：自动将 `frida-gadget` 注入 APK，支持非 root 设备
+- **移动端 APP**：jshook 风格 UI，注入状态自动检测，一键拉起 MCP 服务（详见 [`mobile-app/`](mobile-app/)）
+- **注入状态检测**：三层检测策略（静态 / 运行时 / 进程），实时展示已注入应用
 - **多设备支持**：支持 USB 设备、远程设备、模拟器
 - **脚本管理**：内置常用 Frida 脚本模板，支持自定义脚本
 - **实时日志**：捕获 Frida 脚本输出和应用日志
@@ -243,6 +246,36 @@ FridaMCP:
 - 使用前请确保已获得目标应用的所有者授权
 - 注入 APK 后请勿分发，仅供个人测试使用
 
+## 移动端 APP
+
+FridaMCP 提供了 jshook 风格的移动端 APP UI，支持应用注入管理、注入状态自动检测、MCP 服务一键拉起等功能。
+
+### 核心功能
+
+- **应用列表**：展示设备上所有应用，标注注入状态（运行中 / 已注入 / 未注入 / 异常）
+- **注入检测**：三层检测策略（静态扫描 APK / 运行时端口检测 / 进程内存映射检测）
+- **一键拉起 MCP**：为已注入应用快速启动/停止 MCP 服务
+- **APK 注入**：图形化 APK 注入工作流，支持架构选择和自动签名
+- **MCP 管理**：服务器启停、会话管理、8 个模块开关
+
+### 快速开始
+
+```bash
+cd mobile-app
+npm install
+npm run dev
+# 浏览器访问 http://localhost:3000（建议使用移动端模拟）
+```
+
+详细设计说明请参阅 [移动端 APP 设计方案](docs/MOBILE_APP_DESIGN.md)。
+
+## 文档
+
+- [架构设计](docs/ARCHITECTURE.md) - 整体架构与模块设计
+- [使用指南](docs/USAGE.md) - 详细使用说明
+- [模块说明](docs/MODULES.md) - 8 个 MCP 模块详解
+- [移动端 APP 设计方案](docs/MOBILE_APP_DESIGN.md) - 移动端 UI 与注入检测设计
+
 ## 许可证
 
 MIT License - 详见 [LICENSE](LICENSE)
@@ -255,4 +288,5 @@ MIT License - 详见 [LICENSE](LICENSE)
 
 - [Frida](https://frida.re/) - 世界级的动态插桩工具
 - [MCP](https://modelcontextprotocol.io/) - Model Context Protocol
+- [JsHook](https://github.com/0x67666767/JsHook) - 移动端 UI 设计灵感来源
 - 所有为 Android 安全研究做出贡献的开源项目
