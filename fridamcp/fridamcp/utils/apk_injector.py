@@ -41,7 +41,13 @@ def get_gadget_path(arch: str) -> Optional[str]:
     """
     gadget_dir = config.GADGET_DIR
     if not os.path.isdir(gadget_dir):
-        logger.warning(f"Gadget directory not found: {gadget_dir}")
+        logger.warning(
+            f"Gadget directory not found: {gadget_dir}\n"
+            f"请下载 frida-gadget 并放置到该目录。下载地址:\n"
+            f"  https://github.com/frida/frida/releases\n"
+            f"  文件名格式: libfrida-gadget-{arch}.so\n"
+            f"  或创建目录: mkdir -p {gadget_dir}"
+        )
         return None
 
     # 查找对应架构的 gadget

@@ -142,13 +142,20 @@ class DeviceManager:
         return self._device_type == dtype and self._device_id == did
 
     def get_current_device(self) -> Optional[frida.core.Device]:
-        """获取当前已连接的设备（不触发重连）"""
+        """获取当前已连接的设备（不触发重连）
+
+        如果设备未连接，返回 None 而不是阻塞重连。
+        调用方应检查返回值并提示用户先 select_device。
+        """
         if self._device is None:
-            try:
-                return self.get_device()
-            except Exception:
-                return None
-        return self._device
+            return None
+        # 验证现有连接是否仍然有效
+        try:
+            self._device.query_system_parameters()
+            return self._device
+        except Exception:
+            self._device = None
+            return None
 
     def get_device_info(self) -> Dict[str, Any]:
         """获取当前设备详细信息"""

@@ -430,4 +430,89 @@ def register_tools(mcp):
             logger.error(f"get_hook_messages failed: {e}")
             return [{"error": str(e)}]
 
+    @mcp.tool()
+    def execute_script(
+        session_id: str,
+        script_code: str,
+        script_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """在指定会话中执行自定义 Frida JavaScript 脚本
+
+        这是通用脚本执行工具，AI 可以编写任意 Frida 脚本进行动态分析。
+        脚本可以使用 rpc.exports 导出函数，后续可通过 call_script_function 调用。
+
+        Args:
+            session_id: 会话 ID（通过 attach_process 获取）
+            script_code: Frida JavaScript 脚本源码
+            script_name: 脚本名称（可选，用于标识）
+
+        Returns:
+            包含 script_id 的字典，用于后续调用 call_script_function
+
+        示例:
+            script_code = '''
+            rpc.exports = {
+                getinfo: function() {
+                    return { platform: Process.platform, arch: Process.arch };
+                }
+            };
+            '''
+        """
+        try:
+            result = frida_client.execute_script(
+                session_id, script_code, script_name
+            )
+            logger.info(f"Custom script executed: {result.get('script_id')}")
+            return result
+        except Exception as e:
+            logger.error(f"execute_script failed: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def call_script_function(
+        session_id: str,
+        script_id: str,
+        function_name: str,
+        args: Optional[List[Any]] = None,
+    ) -> Dict[str, Any]:
+        """调用已加载脚本的导出函数 (rpc.exports)
+
+        配合 execute_script 使用：先加载脚本，再调用其中的导出函数。
+
+        Args:
+            session_id: 会话 ID
+            script_id: 脚本 ID（通过 execute_script 获取）
+            function_name: rpc.exports 中定义的函数名
+            args: 函数参数列表（可选）
+
+        Returns:
+            函数返回值
+        """
+        try:
+            result = frida_client.call_script_function(
+                session_id, script_id, function_name, args
+            )
+            return {"success": True, "result": result}
+        except Exception as e:
+            logger.error(f"call_script_function failed: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def unload_script(session_id: str, script_id: str) -> Dict[str, Any]:
+        """卸载已加载的脚本
+
+        Args:
+            session_id: 会话 ID
+            script_id: 脚本 ID
+
+        Returns:
+            操作结果
+        """
+        try:
+            success = frida_client.unload_script(session_id, script_id)
+            return {"success": success, "script_id": script_id}
+        except Exception as e:
+            logger.error(f"unload_script failed: {e}")
+            return {"error": str(e)}
+
     logger.info("Hook module tools registered")

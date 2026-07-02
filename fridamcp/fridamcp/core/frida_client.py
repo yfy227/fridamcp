@@ -35,10 +35,17 @@ class FridaClient:
     # ============ 进程管理 ============
 
     def _get_device(self):
-        """获取当前设备，如果不可用则尝试获取"""
+        """获取当前设备，如果未连接则抛出清晰错误
+
+        不再自动触发阻塞式重连，调用方应先调用 select_device。
+        """
         device = device_manager.get_current_device()
         if device is None:
-            device = device_manager.get_device()
+            raise RuntimeError(
+                "设备未连接。请先调用 select_device 工具选择设备 "
+                "(例如 select_device(device_type='local') 或 "
+                "select_device(device_type='usb'))"
+            )
         return device
 
     def list_processes(self) -> List[Dict[str, Any]]:
