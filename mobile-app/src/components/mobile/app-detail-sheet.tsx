@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import {
   X,
   Play,
@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import type { AppInfo } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "./confirm-dialog";
 
 interface AppDetailSheetProps {
   app: AppInfo | null;
@@ -39,6 +40,8 @@ export function AppDetailSheet({
   onRescan,
   onRemoveInjection,
 }: AppDetailSheetProps) {
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
+
   useEffect(() => {
     if (app) {
       document.body.style.overflow = "hidden";
@@ -54,6 +57,12 @@ export function AppDetailSheet({
 
   const isInjected = app.injectionStatus === "injected" || app.injectionStatus === "running";
   const statusConfig = getStatusConfig(app.injectionStatus);
+
+  const handleRemoveClick = () => setShowRemoveConfirm(true);
+  const handleRemoveConfirm = () => {
+    setShowRemoveConfirm(false);
+    onRemoveInjection(app);
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center">
@@ -233,7 +242,7 @@ export function AppDetailSheet({
               </button>
               {isInjected && (
                 <button
-                  onClick={() => onRemoveInjection(app)}
+                  onClick={handleRemoveClick}
                   className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-destructive/10 text-destructive font-medium text-xs hover:bg-destructive/20 transition-colors"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
@@ -244,6 +253,17 @@ export function AppDetailSheet({
           </div>
         </div>
       </div>
+
+      {/* 移除注入确认对话框 */}
+      <ConfirmDialog
+        open={showRemoveConfirm}
+        title="移除注入"
+        desc={`确定要移除 ${app.appName} 的 frida-gadget 注入吗？移除后需要重新注入才能使用 Frida 功能。`}
+        confirmLabel="移除注入"
+        variant="danger"
+        onConfirm={handleRemoveConfirm}
+        onCancel={() => setShowRemoveConfirm(false)}
+      />
     </div>
   );
 }

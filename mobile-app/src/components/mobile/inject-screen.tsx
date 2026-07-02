@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   FileUp,
   Syringe,
@@ -201,6 +201,17 @@ export function InjectScreen({ tasks, onInject }: InjectScreenProps) {
         )}
       </button>
 
+      {/* 注入进度步骤 */}
+      {injecting && (
+        <div className="rounded-2xl bg-card border border-border p-4 space-y-3 fade-in">
+          <InjectStep label="解析 APK 文件结构" step={1} delay={0} />
+          <InjectStep label="注入 frida-gadget.so" step={2} delay={600} />
+          <InjectStep label="修改 smali 加载代码" step={3} delay={1200} />
+          <InjectStep label="重新打包并签名" step={4} delay={1800} />
+          {autoInstall && <InjectStep label="安装到设备" step={5} delay={2400} />}
+        </div>
+      )}
+
       {/* 历史任务 */}
       {tasks.length > 0 && (
         <section className="space-y-2">
@@ -315,4 +326,39 @@ function getTaskStatusConfig(status: InjectionTask["status"]) {
     default:
       return { icon: Loader2, label: "等待中", color: "text-muted-foreground", bgColor: "bg-muted/30" };
   }
+}
+
+function InjectStep({ label, step, delay }: { label: string; step: number; delay: number }) {
+  const [status, setStatus] = useState<"pending" | "active" | "done">("pending");
+
+  useEffect(() => {
+    const timer1 = setTimeout(() => setStatus("active"), delay);
+    const timer2 = setTimeout(() => setStatus("done"), delay + 500);
+    return () => { clearTimeout(timer1); clearTimeout(timer2); };
+  }, [delay]);
+
+  return (
+    <div className="flex items-center gap-3">
+      <div className={cn(
+        "w-6 h-6 rounded-full flex items-center justify-center shrink-0 transition-colors",
+        status === "done" ? "bg-primary text-primary-foreground" :
+        status === "active" ? "bg-primary/20 text-primary" :
+        "bg-muted/40 text-muted-foreground"
+      )}>
+        {status === "done" ? (
+          <CheckCircle2 className="w-3.5 h-3.5" />
+        ) : status === "active" ? (
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        ) : (
+          <span className="text-[10px] font-bold">{step}</span>
+        )}
+      </div>
+      <span className={cn(
+        "text-xs transition-colors",
+        status === "pending" ? "text-muted-foreground" : "text-foreground"
+      )}>
+        {label}
+      </span>
+    </div>
+  );
 }

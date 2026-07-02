@@ -14,9 +14,13 @@ import {
   Server,
   ChevronRight,
   X,
+  Smartphone,
+  SearchX,
 } from "lucide-react";
 import type { AppInfo, InjectionStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "./empty-state";
+import { AppListSkeleton } from "./skeleton";
 
 interface AppsScreenProps {
   apps: AppInfo[];
@@ -166,18 +170,40 @@ export function AppsScreen({
 
       {/* 应用列表 */}
       <div className="space-y-2">
-        {filteredApps.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-16 text-center">
-            <CircleDashed className="w-10 h-10 text-muted-foreground/50 mb-3" />
-            <p className="text-sm text-muted-foreground">没有匹配的应用</p>
-            <p className="text-xs text-muted-foreground/70 mt-1">尝试调整搜索或筛选条件</p>
-          </div>
+        {scanning && apps.length === 0 ? (
+          <AppListSkeleton />
+        ) : filteredApps.length === 0 ? (
+          search ? (
+            <EmptyState
+              icon={SearchX}
+              title="没有匹配的应用"
+              desc="尝试调整搜索关键词或筛选条件"
+              actionLabel="清除筛选"
+              onAction={() => { setSearch(""); setFilter("all"); }}
+            />
+          ) : filter !== "all" ? (
+            <EmptyState
+              icon={CircleDashed}
+              title="当前分类无应用"
+              desc={`「${filterOptions.find((f) => f.value === filter)?.label}」分类下没有应用`}
+              actionLabel="查看全部"
+              onAction={() => setFilter("all")}
+            />
+          ) : (
+            <EmptyState
+              icon={Smartphone}
+              title="暂无应用"
+              desc="设备上未检测到已安装应用，请检查设备连接状态"
+              actionLabel="重新扫描"
+              onAction={onScan}
+            />
+          )
         ) : (
           filteredApps.map((app) => (
             <AppCard
               key={app.id}
               app={app}
-              onSelect={() => onSelectApp(app)}
+              onClick={() => onSelectApp(app)}
               onLaunch={() => onLaunchApp(app)}
               onToggleMCP={() => onToggleMCP(app)}
             />
@@ -190,12 +216,12 @@ export function AppsScreen({
 
 function AppCard({
   app,
-  onSelect,
+  onClick,
   onLaunch,
   onToggleMCP,
 }: {
   app: AppInfo;
-  onSelect: () => void;
+  onClick: () => void;
   onLaunch: () => void;
   onToggleMCP: () => void;
 }) {
@@ -210,7 +236,7 @@ function AppCard({
           : "bg-card border-border"
       )}
     >
-      <button onClick={onSelect} className="w-full flex items-center gap-3 text-left">
+      <button onClick={onClick} className="w-full flex items-center gap-3 text-left">
         {/* 应用图标 */}
         <div
           className="app-icon w-12 h-12 text-lg"

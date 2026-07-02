@@ -16,9 +16,11 @@ import {
   Cpu,
   ChevronRight,
   CircleDot,
+  Inbox,
 } from "lucide-react";
 import type { MCPServerStatus, MCPSession, MCPModule } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { EmptyState } from "./empty-state";
 
 interface MCPScreenProps {
   server: MCPServerStatus;
@@ -145,11 +147,11 @@ export function MCPScreen({ server, sessions, modules, onToggleServer }: MCPScre
         </div>
 
         {sessions.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-8 text-center">
-            <CircleDot className="w-8 h-8 text-muted-foreground/40 mb-2" />
-            <p className="text-xs text-muted-foreground">暂无活跃会话</p>
-            <p className="text-[10px] text-muted-foreground/70 mt-0.5">启动已注入应用后将自动创建会话</p>
-          </div>
+          <EmptyState
+            icon={Inbox}
+            title="暂无活跃会话"
+            desc="启动已注入应用后将自动创建会话，或手动拉起 MCP 服务"
+          />
         ) : (
           <div className="space-y-2">
             {sessions.map((session) => (
@@ -175,29 +177,45 @@ export function MCPScreen({ server, sessions, modules, onToggleServer }: MCPScre
         {showModules && (
           <div className="px-4 pb-4 space-y-1.5 fade-in">
             {modules.map((mod) => (
-              <div
-                key={mod.name}
-                className="flex items-center gap-3 p-2.5 rounded-xl bg-muted/30"
-              >
-                <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-base shrink-0">
-                  {mod.icon}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <p className="text-xs font-medium text-foreground">{mod.displayName}</p>
-                    <span className="text-[9px] text-muted-foreground font-mono">{mod.toolCount} tools</span>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground truncate">{mod.description}</p>
-                </div>
-                <span className={cn(
-                  "w-2 h-2 rounded-full shrink-0",
-                  mod.enabled ? "bg-primary" : "bg-muted-foreground/40"
-                )} />
-              </div>
+              <ModuleRow key={mod.name} module={mod} />
             ))}
           </div>
         )}
       </section>
+    </div>
+  );
+}
+
+function ModuleRow({ module: mod }: { module: MCPModule }) {
+  const [enabled, setEnabled] = useState(mod.enabled);
+
+  return (
+    <div className="flex items-center gap-3 p-2.5 rounded-xl bg-muted/30">
+      <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-base shrink-0">
+        {mod.icon}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2">
+          <p className="text-xs font-medium text-foreground">{mod.displayName}</p>
+          <span className="text-[9px] text-muted-foreground font-mono">{mod.toolCount} tools</span>
+        </div>
+        <p className="text-[10px] text-muted-foreground truncate">{mod.description}</p>
+      </div>
+      {/* 开关 */}
+      <button
+        onClick={() => setEnabled(!enabled)}
+        className={cn(
+          "relative w-9 h-5 rounded-full transition-colors shrink-0",
+          enabled ? "bg-primary" : "bg-muted-foreground/30"
+        )}
+      >
+        <span
+          className={cn(
+            "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
+            enabled ? "translate-x-4" : "translate-x-0.5"
+          )}
+        />
+      </button>
     </div>
   );
 }
