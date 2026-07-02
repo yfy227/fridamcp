@@ -49,67 +49,82 @@
 
 ## 快速开始
 
+> 完整的快速上手指南请参阅 [QUICKSTART.md](docs/QUICKSTART.md)
+
 ### 环境要求
 
 - Python 3.9+
-- Android 设备（root 或非 root 均可）
-- USB 数据线（或通过网络连接）
-- `adb` 工具
+- Android 设备（root 或非 root 均可）或本地测试环境
+- `adb` 工具（连接 Android 设备时需要）
 
-### 安装
+### 30 秒安装
 
 ```bash
-# 克隆仓库
 git clone https://github.com/yfy227/fridamcp.git
-cd fridamcp
-
-# 安装 Python 依赖
+cd fridamcp/fridamcp
 pip install -r requirements.txt
-
-# 安装 Frida CLI
-pip install frida-tools
 ```
 
-### Android 端准备
-
-#### 方式一：Root 设备（推荐）
+### 启动服务器
 
 ```bash
-# 进入 android 目录
-cd android
+# 方式 1：连接 Android 设备（USB 调试已开启）
+python -m fridamcp --transport sse --port 8768
 
+# 方式 2：无设备，本地测试
+python -m fridamcp --transport sse --port 8768 --device-type local
+
+# 方式 3：stdio 模式（IDE 集成）
+python -m fridamcp --transport stdio
+```
+
+### 连接 AI 客户端
+
+SSE 连接地址：`http://localhost:8768/sse`
+
+然后直接用自然语言告诉 AI：
+
+```
+列出设备上的所有进程
+附加到 com.example.app 并 Hook 它的登录方法
+在内存中搜索 "password" 字符串
+```
+
+### Android 设备准备
+
+<details>
+<summary>📱 Root 设备（点击展开）</summary>
+
+```bash
 # 安装 frida-server 到设备
-bash install_frida.sh
+cd android && bash install_frida.sh
 
 # 启动 frida-server
 bash start_frida.sh
+
+# 验证
+frida-ps -U
 ```
 
-#### 方式二：非 Root 设备（使用 APK 注入器）
+</details>
+
+<details>
+<summary>📲 非 Root 设备（APK 注入）</summary>
 
 ```bash
-# 进入 injector 目录
-cd injector
+# 1. 下载 frida-gadget
+#    https://github.com/frida/frida/releases
+#    重命名为 libfrida-gadget-arm64-v8a.so
+#    放到 injector/frida_gadget/ 目录
 
-# 注入 frida-gadget 到目标 APK
-python inject_apk.py --input target.apk --output target_injected.apk
+# 2. 注入目标 APK
+python injector/inject_apk.py 目标应用.apk 输出.apk --use-apktool
 
-# 安装注入后的 APK
-adb install target_injected.apk
-
-# 启动应用，frida-gadget 会自动加载
-adb shell am start -n com.target.app/.MainActivity
+# 3. 安装注入后的 APK
+adb install 输出.apk
 ```
 
-### 启动 MCP 服务器
-
-```bash
-# 启动 MCP 服务器（监听 8768 端口）
-python -m fridamcp.server
-
-# 或使用脚本
-bash scripts/run.sh
-```
+</details>
 
 ### 配置 AI 客户端
 
@@ -271,10 +286,14 @@ npm run dev
 
 ## 文档
 
-- [架构设计](docs/ARCHITECTURE.md) - 整体架构与模块设计
-- [使用指南](docs/USAGE.md) - 详细使用说明
-- [模块说明](docs/MODULES.md) - 8 个 MCP 模块详解
-- [移动端 APP 设计方案](docs/MOBILE_APP_DESIGN.md) - 移动端 UI 与注入检测设计
+| 文档 | 说明 |
+|------|------|
+| [快速上手](docs/QUICKSTART.md) | 5 分钟内让 AI 帮你分析 Android 应用 |
+| [使用指南](docs/USAGE.md) | 详细使用说明、场景示例、工具列表 |
+| [常见问题](docs/FAQ.md) | 安装、设备、MCP、性能等常见问题解答 |
+| [架构设计](docs/ARCHITECTURE.md) | 整体架构与模块设计 |
+| [模块说明](docs/MODULES.md) | 8 个 MCP 模块详解 |
+| [移动端 APP 设计](docs/MOBILE_APP_DESIGN.md) | 移动端 UI 与注入检测设计 |
 
 ## 许可证
 

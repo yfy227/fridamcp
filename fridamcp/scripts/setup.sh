@@ -26,6 +26,9 @@ echo "Python version: $VERSION"
 # 安装依赖
 echo ""
 echo "[2/4] Installing Python dependencies..."
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_DIR"
 pip install -r requirements.txt
 echo "Dependencies installed."
 

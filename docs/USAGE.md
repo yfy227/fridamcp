@@ -147,9 +147,29 @@ AI:
 4. [ui_automation] tap(注册按钮坐标)
 5. [ui_automation] input_text("test@example.com")
 6. [ui_automation] input_text("password123")
-7. [ui_automation] tap(提交按钮)
-8. [ui_automation] screenshot() → 验证结果
 ```
+
+### 场景 6: 执行自定义 Frida 脚本（高级）
+
+```
+用户: 写一个 Frida 脚本，枚举应用加载的所有 native 模块
+
+AI:
+1. [process] attach_process("com.example.app") → 获取 session_id
+2. [hook] execute_script(session_id, '''
+     rpc.exports = {
+       listModules: function() {
+         return Process.enumerateModules().map(function(m) {
+           return { name: m.name, base: m.base.toString(), size: m.size };
+         });
+       }
+     };
+   ''') → 获取 script_id
+3. [hook] call_script_function(session_id, script_id, "listModules") → 返回模块列表
+4. [hook] unload_script(session_id, script_id) → 清理
+```
+
+> **提示**：`execute_script` 是最强大的工具，AI 可以编写任意 Frida JavaScript 脚本进行动态分析。
 
 ## 工具列表
 
@@ -178,6 +198,10 @@ AI:
 | `list_hooks` | 列出活跃 Hook |
 | `unhook` | 移除 Hook |
 | `get_hook_messages` | 获取 Hook 消息 |
+| `trace_method` | 方法追踪 |
+| `execute_script` | **执行自定义 Frida 脚本**（通用） |
+| `call_script_function` | **调用脚本导出函数**（rpc.exports） |
+| `unload_script` | **卸载已加载的脚本** |
 
 ### Memory 模块
 
