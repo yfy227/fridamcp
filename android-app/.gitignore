@@ -1,0 +1,26 @@
+# Android
+*.apk
+*.aab
+*.dex
+*.class
+
+# Gradle
+.gradle/
+build/
+local.properties
+*.iml
+
+# IntelliJ / Android Studio
+.idea/
+*.swp
+.cxx/
+
+# Keystore
+*.jks
+*.keystore
+
+# NDK
+.cxx/
+
+# Logs
+*.log

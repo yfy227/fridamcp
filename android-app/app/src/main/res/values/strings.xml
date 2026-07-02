@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FridaMCP</string>
+    <string name="app_subtitle">AI 驱动的动态分析</string>
+    <string name="mcp_server_channel">MCP 服务</string>
+    <string name="mcp_server_running">MCP 服务器运行中</string>
+    <string name="mcp_server_running_detail">端口 8768 · %1$d 个会话</string>
+    <string name="frida_channel">Frida 服务</string>
+    <string name="frida_running">Frida 引擎运行中</string>
+    <string name="tab_dashboard">仪表盘</string>
+    <string name="tab_apps">应用</string>
+    <string name="tab_inject">注入</string>
+    <string name="tab_mcp">MCP</string>
+    <string name="tab_settings">设置</string>
+    <string name="status_online">在线</string>
+    <string name="status_offline">离线</string>
+    <string name="status_starting">启动中</string>
+    <string name="status_error">异常</string>
+    <string name="status_injected">已注入</string>
+    <string name="status_not_injected">未注入</string>
+    <string name="status_running">运行中</string>
+    <string name="action_scan">扫描应用</string>
+    <string name="action_launch">启动</string>
+    <string name="action_start_mcp">启动 MCP</string>
+    <string name="action_stop_mcp">停止 MCP</string>
+    <string name="action_inject">开始注入</string>
+    <string name="action_rescan">重新检测</string>
+    <string name="action_remove_injection">移除注入</string>
+</resources>
