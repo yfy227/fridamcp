@@ -16,10 +16,10 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Activity
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.Security
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
@@ -82,7 +82,7 @@ fun DashboardScreen(
         // Device status card
         item {
             StatusCard(
-                icon = Icons.Default.Security,
+                icon = Icons.Default.Lock,
                 title = "设备状态",
                 statusText = device.status.label,
                 statusColor = Success,
@@ -99,7 +99,7 @@ fun DashboardScreen(
         // MCP server status card
         item {
             StatusCard(
-                icon = Icons.Default.Dns,
+                icon = Icons.Default.Email,
                 title = "MCP 服务器",
                 statusText = if (mcpServer.running) "运行中" else "已停止",
                 statusColor = if (mcpServer.running) Success else MutedForeground,
@@ -121,20 +121,20 @@ fun DashboardScreen(
             ) {
                 StatCard(
                     modifier = Modifier.weight(1f),
-                    icon = Icons.Default.Apps,
+                    icon = Icons.Default.List,
                     value = "${apps.size}",
                     label = "总应用数",
                 )
                 StatCard(
                     modifier = Modifier.weight(1f),
-                    icon = Icons.Default.Security,
+                    icon = Icons.Default.Lock,
                     value = "$injectedCount",
                     label = "已注入",
                     tint = Primary,
                 )
                 StatCard(
                     modifier = Modifier.weight(1f),
-                    icon = Icons.Default.Activity,
+                    icon = Icons.Default.Star,
                     value = "$runningCount",
                     label = "运行中",
                     tint = Success,

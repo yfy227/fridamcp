@@ -15,19 +15,19 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Activity
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Dns
-import androidx.compose.material.icons.filled.FileCopy
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Email
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Lock
-import androidx.compose.material.icons.filled.Memory
-import androidx.compose.material.icons.filled.NetworkCheck
-import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Stop
-import androidx.compose.material.icons.filled.Terminal
-import androidx.compose.material.icons.filled.ViewList
-import androidx.compose.material.icons.filled.Visibility
+import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -87,7 +87,7 @@ fun McpScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Default.Dns, contentDescription = null, tint = if (serverStatus.running) Success else MutedForeground, modifier = Modifier.size(20.dp))
+                            Icon(Icons.Default.Email, contentDescription = null, tint = if (serverStatus.running) Success else MutedForeground, modifier = Modifier.size(20.dp))
                             Text("MCP 服务器", style = MaterialTheme.typography.titleLarge, color = Foreground)
                         }
                         Box(
@@ -215,7 +215,7 @@ private fun SessionCard(session: com.fridamcp.app.data.model.MCPSession) {
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text("PID: ${session.pid}", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
-                Text("工具调用: ${session.toolCalls}", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+                Text("消息: ${session.messageCount}", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
             }
         }
     }
@@ -224,15 +224,15 @@ private fun SessionCard(session: com.fridamcp.app.data.model.MCPSession) {
 @Composable
 private fun ModuleCard(module: MCPModule, onToggle: () -> Unit) {
     val icon = when (module.name) {
-        "process" -> Icons.Default.PhoneAndroid
-        "hook" -> Icons.Default.Code
-        "memory" -> Icons.Default.Memory
-        "network" -> Icons.Default.NetworkCheck
-        "filesystem" -> Icons.Default.FileCopy
-        "ui_automation" -> Icons.Default.ViewList
+        "process" -> Icons.Default.Home
+        "hook" -> Icons.Default.Build
+        "memory" -> Icons.Default.Info
+        "network" -> Icons.Default.Email
+        "filesystem" -> Icons.Default.List
+        "ui_automation" -> Icons.Default.Search
         "crypto" -> Icons.Default.Lock
-        "log" -> Icons.Default.Terminal
-        else -> Icons.Default.Activity
+        "log" -> Icons.Default.Refresh
+        else -> Icons.Default.Star
     }
     Card(
         modifier = Modifier.fillMaxWidth(),

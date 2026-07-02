@@ -16,7 +16,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
-import androidx.compose.material.icons.filled.Code
+import androidx.compose.material.icons.filled.Build
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -160,7 +160,7 @@ fun InjectScreen(
                             shape = RoundedCornerShape(12.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = Primary),
                         ) {
-                            Icon(Icons.Default.Code, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Build, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.size(8.dp))
                             Text("开始注入", style = MaterialTheme.typography.labelLarge)
                         }

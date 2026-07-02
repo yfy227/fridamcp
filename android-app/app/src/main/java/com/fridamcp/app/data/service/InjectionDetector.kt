@@ -91,12 +91,12 @@ class InjectionDetector(private val context: Context) {
     fun detectProcess(packageName: String): DetectionResult {
         try {
             // Read /proc directory
-            val procDir = File("/proc")
-            val processDirs = procDir.listFiles { f -> f.name.matches(Regex("\\d+")) } ?: emptyList()
+            val procRoot = File("/proc")
+            val processDirs = procRoot.listFiles { f: File -> f.name.matches(Regex("\\d+")) } ?: emptyArray()
 
             for (procDir in processDirs) {
                 try {
-                    val cmdline = File(procDir, "cmdline").readText().trim('\u0000')
+                    val cmdline = File(procDir, "cmdline").readText().trimEnd('\u0000')
                     if (cmdline == packageName) {
                         val pid = procDir.name.toInt()
                         val result = detectRuntime(pid)

@@ -8,10 +8,10 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Activity
-import androidx.compose.material.icons.filled.Apps
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Dns
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
@@ -38,10 +38,10 @@ fun BottomNav(
     injectedCount: Int = 0,
 ) {
     val tabs = listOf(
-        TabItem(TabId.DASHBOARD, "仪表盘", Icons.Default.Activity),
-        TabItem(TabId.APPS, "应用", Icons.Default.Apps, if (injectedCount > 0) injectedCount else null),
-        TabItem(TabId.INJECT, "注入", Icons.Default.Code),
-        TabItem(TabId.MCP, "MCP", Icons.Default.Dns),
+        TabItem(TabId.DASHBOARD, "仪表盘", Icons.Default.Home),
+        TabItem(TabId.APPS, "应用", Icons.Default.Menu, if (injectedCount > 0) injectedCount else null),
+        TabItem(TabId.INJECT, "注入", Icons.Default.Build),
+        TabItem(TabId.MCP, "MCP", Icons.Default.Email),
         TabItem(TabId.SETTINGS, "设置", Icons.Default.Settings),
     )
 

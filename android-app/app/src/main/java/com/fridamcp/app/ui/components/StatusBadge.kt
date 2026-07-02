@@ -69,6 +69,7 @@ fun StatusBadge(
     }
 }
 
+@Composable
 fun InjectionStatus.badgeColor(): Color = when (this) {
     InjectionStatus.INJECTED -> Primary
     InjectionStatus.RUNNING -> Success
@@ -76,6 +77,7 @@ fun InjectionStatus.badgeColor(): Color = when (this) {
     InjectionStatus.ERROR -> Error
 }
 
+@Composable
 fun MCPServiceStatus.badgeColor(): Color = when (this) {
     MCPServiceStatus.ONLINE -> Success
     MCPServiceStatus.OFFLINE -> MaterialTheme.colorScheme.outline
