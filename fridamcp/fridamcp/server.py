@@ -217,11 +217,11 @@ async def run_sse_server(mcp, host: str, port: int):
 
     while not _shutdown_event.is_set():
         try:
-            if hasattr(mcp, "run_sse_async"):
-                logger.info(f"Starting SSE server on {host}:{port}")
-                await mcp.run_sse_async(host=host, port=port)
-            elif hasattr(mcp, "sse_app"):
+            # 新版 fastmcp: run_sse_async 不再接受 host/port 参数
+            # 统一使用 sse_app() + uvicorn 方式启动
+            if hasattr(mcp, "sse_app"):
                 import uvicorn
+                logger.info(f"Starting SSE server on {host}:{port}")
                 app = mcp.sse_app()
                 config_uv = uvicorn.Config(
                     app,
@@ -233,6 +233,13 @@ async def run_sse_server(mcp, host: str, port: int):
                 # 关联关闭事件
                 server.install_signal_handlers = lambda: None
                 await server.serve()
+            elif hasattr(mcp, "run_sse_async"):
+                # 兼容旧版 fastmcp
+                logger.info(f"Starting SSE server on {host}:{port}")
+                try:
+                    await mcp.run_sse_async(host=host, port=port)
+                except TypeError:
+                    await mcp.run_sse_async()
             else:
                 logger.error("SSE mode not supported by this MCP version")
                 sys.exit(1)

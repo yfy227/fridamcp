@@ -229,28 +229,6 @@ def register_tools(mcp):
             logger.error(f"get_system_status failed: {e}")
             return {"error": str(e)}
 
-    @mcp.tool()
-    def reconnect_device() -> Dict[str, Any]:
-        """重新连接 Frida 设备
-
-        当设备连接断开或异常时，强制重新连接。
-
-        Returns:
-            操作结果
-        """
-        try:
-            from ..core.device_manager import device_manager
-            device = device_manager.refresh()
-            return {
-                "success": True,
-                "device": {
-                    "id": device.id,
-                    "name": device.name,
-                    "type": device.type,
-                },
-            }
-        except Exception as e:
-            logger.error(f"reconnect_device failed: {e}")
-            return {"error": str(e)}
+    # 注意: reconnect_device 已在 server.py 中注册，此处不再重复定义
 
     logger.info("Process module tools registered")
