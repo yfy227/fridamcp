@@ -63,20 +63,18 @@ fun InjectScreen(
     var arch by remember { mutableStateOf("arm64-v8a") }
 
     // File picker launcher
+    val ctx = LocalContext.current
     val pickApk = rememberLauncherForActivityResult(
         contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
     ) { uri ->
         if (uri != null) {
-            // Copy URI to a temp file path for processing
             try {
-                val ctx = LocalContext.current
                 val input = ctx.contentResolver.openInputStream(uri)
                 if (input != null) {
                     val tempFile = java.io.File(ctx.cacheDir, "temp_${System.currentTimeMillis()}.apk")
                     java.io.FileOutputStream(tempFile).use { out -> input.copyTo(out) }
                     input.close()
                     apkPath = tempFile.absolutePath
-                    // Try to extract app name and package name from APK
                     try {
                         val pm = ctx.packageManager
                         val info = pm.getPackageArchiveInfo(tempFile.absolutePath, 0)
