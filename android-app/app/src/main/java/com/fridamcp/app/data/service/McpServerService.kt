@@ -291,14 +291,12 @@ class McpServerService : Service() {
 
     private fun sendSseStream(output: OutputStream, client: Socket) {
         try {
-            val headers = """
-                HTTP/1.1 200 OK
-                Content-Type: text/event-stream
-                Cache-Control: no-cache
-                Connection: keep-alive
-                Access-Control-Allow-Origin: *
-
-            """.trimIndent() + "\r\n"
+            val headers = "HTTP/1.1 200 OK\r\n" +
+                "Content-Type: text/event-stream\r\n" +
+                "Cache-Control: no-cache\r\n" +
+                "Connection: keep-alive\r\n" +
+                "Access-Control-Allow-Origin: *\r\n" +
+                "\r\n"
             output.write(headers.toByteArray())
             output.flush()
 
@@ -321,14 +319,13 @@ class McpServerService : Service() {
 
     private fun sendJson(output: OutputStream, status: Int, json: JSONObject) {
         val body = json.toString()
-        val response = """
-            HTTP/1.1 $status OK
-            Content-Type: application/json
-            Content-Length: ${body.toByteArray().size}
-            Access-Control-Allow-Origin: *
-            Connection: close
-
-        """.trimIndent() + "\r\n$body"
+        val response = "HTTP/1.1 $status OK\r\n" +
+            "Content-Type: application/json\r\n" +
+            "Content-Length: ${body.toByteArray().size}\r\n" +
+            "Access-Control-Allow-Origin: *\r\n" +
+            "Connection: close\r\n" +
+            "\r\n" +
+            body
         output.write(response.toByteArray())
         output.flush()
     }

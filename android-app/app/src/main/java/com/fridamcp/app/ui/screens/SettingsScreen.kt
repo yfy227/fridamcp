@@ -104,7 +104,7 @@ fun SettingsScreen(
                 Column(modifier = Modifier.padding(16.dp)) {
                     Text("MCP 默认配置", style = MaterialTheme.typography.titleLarge, color = Foreground)
                     Spacer(modifier = Modifier.height(12.dp))
-                    SettingRow("监听地址", "0.0.0.0")
+                    SettingRow("监听地址", "127.0.0.1")
                     SettingRow("端口", "8768")
                     SettingRow("协议", "SSE / Streamable HTTP")
                     SettingRow("最大会话数", "10")

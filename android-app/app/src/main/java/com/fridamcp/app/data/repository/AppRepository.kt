@@ -1,9 +1,7 @@
 package com.fridamcp.app.data.repository
 
 import android.content.Context
-import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
-import android.graphics.drawable.Drawable
 import com.fridamcp.app.data.model.*
 import com.fridamcp.app.data.service.InjectionDetector
 import com.fridamcp.app.ui.theme.AppIconColors

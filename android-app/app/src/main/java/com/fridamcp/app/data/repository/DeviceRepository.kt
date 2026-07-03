@@ -83,7 +83,7 @@ class DeviceRepository(private val context: Context) {
             process.waitFor()
             if (output.isNotEmpty()) output else null
         } catch (e: Exception) {
-            "unknown"
+            null
         }
     }
 }

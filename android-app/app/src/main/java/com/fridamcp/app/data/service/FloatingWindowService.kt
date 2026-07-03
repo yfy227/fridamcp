@@ -13,7 +13,6 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
-import com.fridamcp.app.R
 
 /**
  * Floating window service — shows a draggable overlay with MCP server status.
@@ -35,6 +34,7 @@ class FloatingWindowService : Service() {
 
     private var windowManager: WindowManager? = null
     private var floatingView: View? = null
+    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
 
     override fun onCreate() {
         super.onCreate()
@@ -96,12 +96,36 @@ class FloatingWindowService : Service() {
         container.addView(titleText, layoutParams)
 
         val statusText = TextView(this).apply {
-            text = "状态: 运行中"
-            setTextColor(0xFF22C55E.toInt())
+            text = "状态: 检查中..."
+            setTextColor(0xFFA0A4AB.toInt())
             textSize = 11f
             id = STATUS_TEXT_ID
         }
         container.addView(statusText, layoutParams)
+
+        // Check real MCP server status
+        Thread {
+            var isRunning = false
+            try {
+                val socket = java.net.Socket("127.0.0.1", 8768)
+                socket.use {
+                    val writer = it.getOutputStream()
+                    writer.write("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n".toByteArray())
+                    writer.flush()
+                    isRunning = true
+                }
+            } catch (e: Exception) {
+                isRunning = false
+            }
+            val displayText = if (isRunning) "状态: 运行中 ●" else "状态: 已停止 ●"
+            val displayColor = if (isRunning) 0xFF22C55E.toInt() else 0xFFEF4444.toInt()
+            mainHandler.post {
+                (floatingView?.findViewById(STATUS_TEXT_ID) as? TextView)?.apply {
+                    text = displayText
+                    setTextColor(displayColor)
+                }
+            }
+        }.start()
 
         val addrText = TextView(this).apply {
             text = "127.0.0.1:8768"

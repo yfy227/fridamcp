@@ -37,10 +37,13 @@ class SharedViewModel(
     val floatingWindowEnabled: StateFlow<Boolean> = _floatingWindowEnabled.asStateFlow()
 
     init {
-        // Load real data at startup
+        // Load real data at startup — device detection is fast (no I/O)
         deviceRepository.detectDevice()
-        appRepository.loadInstalledApps()
-        refreshInjectedCount()
+        // App loading scans all APKs — defer to background thread to avoid ANR
+        Thread {
+            appRepository.loadInstalledApps()
+            refreshInjectedCount()
+        }.start()
         mcpRepository.addLog(LogLevel.INFO, "System", "FridaMCP 已启动 — 设备: ${deviceRepository.deviceInfo.value.name}")
     }
 
@@ -52,16 +55,20 @@ class SharedViewModel(
 
     fun scanAllApps() {
         mcpRepository.addLog(LogLevel.INFO, "Scanner", "开始扫描 ${apps.value.size} 个应用...")
-        appRepository.loadInstalledApps()
-        refreshInjectedCount()
-        val injected = _injectedCount.value
-        mcpRepository.addLog(LogLevel.INFO, "Scanner", "扫描完成 — 发现 $injected 个已注入应用")
+        Thread {
+            appRepository.loadInstalledApps()
+            refreshInjectedCount()
+            val injected = _injectedCount.value
+            mcpRepository.addLog(LogLevel.INFO, "Scanner", "扫描完成 — 发现 $injected 个已注入应用")
+        }.start()
     }
 
     fun scanApp(packageName: String) {
-        appRepository.scanApp(packageName)
-        refreshInjectedCount()
-        mcpRepository.addLog(LogLevel.INFO, "Scanner", "已重新扫描: $packageName")
+        Thread {
+            appRepository.scanApp(packageName)
+            refreshInjectedCount()
+            mcpRepository.addLog(LogLevel.INFO, "Scanner", "已重新扫描: $packageName")
+        }.start()
     }
 
     fun toggleMCPServer() {
@@ -93,20 +100,13 @@ class SharedViewModel(
         }
         val intent = Intent(ctx, FloatingWindowService::class.java)
         intent.action = FloatingWindowService.ACTION_SHOW
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            ctx.startForegroundService(intent)
-        } else {
-            ctx.startService(intent)
-        }
+        ctx.startService(intent)
         _floatingWindowEnabled.value = true
         mcpRepository.addLog(LogLevel.INFO, "FloatingWindow", "悬浮窗已显示")
     }
 
     fun hideFloatingWindow() {
         val ctx = appRepository.context
-        val intent = Intent(ctx, FloatingWindowService::class.java)
-        intent.action = FloatingWindowService.ACTION_HIDE
-        ctx.startService(intent)
         ctx.stopService(Intent(ctx, FloatingWindowService::class.java))
         _floatingWindowEnabled.value = false
         mcpRepository.addLog(LogLevel.INFO, "FloatingWindow", "悬浮窗已隐藏")
