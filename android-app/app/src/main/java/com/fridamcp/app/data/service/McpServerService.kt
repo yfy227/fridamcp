@@ -603,9 +603,9 @@ class McpServerService : Service() {
                     return JSONObject().put("content", JSONArray()
                         .put(JSONObject()
                             .put("type", "text")
-                            .put("text", "Found ${appsList.length()} apps")
+                            .put("text", "Found ${appsList.length()} apps:\n${appsList.toString(2)}")
                         )
-                    ).put("apps", appsList)
+                    )
                 }
 
                 "get_device_info" -> {
