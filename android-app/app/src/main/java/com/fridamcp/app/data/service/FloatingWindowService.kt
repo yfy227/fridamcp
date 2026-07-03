@@ -13,7 +13,6 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.compose.runtime.MutableFloatState
 import com.fridamcp.app.R
 
 /**
@@ -30,6 +29,7 @@ class FloatingWindowService : Service() {
     companion object {
         const val ACTION_SHOW = "com.fridamcp.app.SHOW_FLOATING"
         const val ACTION_HIDE = "com.fridamcp.app.HIDE_FLOATING"
+        const val STATUS_TEXT_ID = 10001
         private const val TAG = "FloatingWindow"
     }
 
@@ -160,10 +160,6 @@ class FloatingWindowService : Service() {
             }
         }
         floatingView = null
-    }
-
-    companion object {
-        const val STATUS_TEXT_ID = 10001
     }
 
     override fun onDestroy() {
