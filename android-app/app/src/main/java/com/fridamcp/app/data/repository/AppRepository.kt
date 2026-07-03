@@ -58,7 +58,7 @@ class AppRepository(val context: Context) {
                     packageName = appInfo.packageName,
                     appName = pm.getApplicationLabel(appInfo).toString(),
                     version = pkgInfo?.versionName ?: "unknown",
-                    versionCode = pkgInfo?.let { if (it.versionCode > 0) it.versionCode else 1 } ?: 1,
+                    versionCode = pkgInfo?.let { it.versionCode.toLong() } ?: 1L,
                     iconColor = color,
                     iconText = pm.getApplicationLabel(appInfo).toString().firstOrNull()?.toString() ?: "?",
                     isSystem = isSystem,

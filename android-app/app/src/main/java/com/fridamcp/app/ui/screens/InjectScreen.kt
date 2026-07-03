@@ -152,7 +152,7 @@ fun InjectScreen(
                         Button(
                             onClick = {
                                 if (apkPath.isNotBlank() && appName.isNotBlank() && packageName.isNotBlank()) {
-                                    viewModel.createInjectionTask(apkPath, appName, packageName, arch, useApktool)
+                                    viewModel.startInjection(apkPath, appName, packageName, arch, useApktool)
                                 }
                             },
                             modifier = Modifier

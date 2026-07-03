@@ -94,7 +94,7 @@ fun AppsScreen(
                 Text("应用列表", style = MaterialTheme.typography.headlineLarge, color = Foreground, fontWeight = FontWeight.Bold)
                 Text("$injectedCount 个已注入 / ${apps.size} 个应用", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
             }
-            IconButton(onClick = { viewModel.scanApps() }) {
+            IconButton(onClick = { viewModel.scanAllApps() }) {
                 Icon(
                     imageVector = Icons.Default.Refresh,
                     contentDescription = "扫描",
@@ -159,19 +159,19 @@ fun AppsScreen(
             app = app,
             onDismiss = { selectedApp = null },
             onLaunch = {
-                viewModel.launchApp(app.id)
+                viewModel.launchApp(app.packageName)
                 selectedApp = null
             },
             onToggleMCP = {
-                viewModel.toggleMCP(app.id)
+                viewModel.toggleAppMCP(app)
                 selectedApp = null
             },
             onRescan = {
-                viewModel.rescanApp(app.id)
+                viewModel.scanApp(app.packageName)
                 selectedApp = null
             },
             onRemoveInjection = {
-                viewModel.removeInjection(app.id)
+                viewModel.removeInjection(app)
                 selectedApp = null
             },
         )
