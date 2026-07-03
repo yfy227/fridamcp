@@ -594,9 +594,8 @@ class McpServerService : Service() {
                 }
                 "inject_apk" -> {
                     val apkPath = args.optString("apk_path"); val arch = args.optString("arch", "arm64-v8a")
-                    val outputPath = "${apkPath.removeSuffix(".apk")}_injected.apk"
                     val injector = ApkInjector(this)
-                    val result = injector.inject(apkPath, outputPath, arch, false)
+                    val result = injector.inject(apkPath, arch)
                     return when (result) { is ApkInjector.Result.Success -> textResult("Injection complete: ${result.outputPath}"); is ApkInjector.Result.Error -> textResult("Injection failed: ${result.message}") }
                 }
                 "list_sessions" -> {
