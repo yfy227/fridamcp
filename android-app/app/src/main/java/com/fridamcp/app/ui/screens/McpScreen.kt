@@ -61,6 +61,7 @@ fun McpScreen(
     val serverStatus by viewModel.serverStatus.collectAsState()
     val sessions by viewModel.sessions.collectAsState()
     val modules by viewModel.modules.collectAsState()
+    val floatingEnabled by viewModel.floatingWindowEnabled.collectAsState()
 
     LazyColumn(
         modifier = modifier
@@ -129,6 +130,49 @@ fun McpScreen(
                         Spacer(modifier = Modifier.size(8.dp))
                         Text(if (serverStatus.running) "停止服务器" else "启动服务器")
                     }
+                }
+            }
+        }
+
+        // Floating window toggle
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardElevated),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(16.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column {
+                        Text("悬浮窗", style = MaterialTheme.typography.titleMedium, color = Foreground)
+                        Text("显示 MCP 状态悬浮窗", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+                    }
+                    Switch(
+                        checked = floatingEnabled,
+                        onCheckedChange = { viewModel.toggleFloatingWindow() },
+                    )
+                }
+            }
+        }
+
+        // Connection info
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardElevated),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("连接信息", style = MaterialTheme.typography.titleMedium, color = Foreground)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("SSE:  http://127.0.0.1:${serverStatus.port}/sse", style = MaterialTheme.typography.bodySmall, color = Primary)
+                    Text("RPC:  http://127.0.0.1:${serverStatus.port}/mcp", style = MaterialTheme.typography.bodySmall, color = Primary)
+                    Text("状态: http://127.0.0.1:${serverStatus.port}/", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
                 }
             }
         }

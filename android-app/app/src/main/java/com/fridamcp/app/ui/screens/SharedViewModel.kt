@@ -1,5 +1,8 @@
 package com.fridamcp.app.ui.screens
 
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import com.fridamcp.app.FridaMCPApplication
@@ -7,6 +10,7 @@ import com.fridamcp.app.data.model.*
 import com.fridamcp.app.data.repository.AppRepository
 import com.fridamcp.app.data.repository.DeviceRepository
 import com.fridamcp.app.data.repository.McpRepository
+import com.fridamcp.app.data.service.FloatingWindowService
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -28,6 +32,9 @@ class SharedViewModel(
 
     private val _injectedCount = MutableStateFlow(0)
     val injectedCount: StateFlow<Int> = _injectedCount.asStateFlow()
+
+    private val _floatingWindowEnabled = MutableStateFlow(false)
+    val floatingWindowEnabled: StateFlow<Boolean> = _floatingWindowEnabled.asStateFlow()
 
     init {
         // Load real data at startup
@@ -67,6 +74,42 @@ class SharedViewModel(
 
     fun toggleModule(name: String) {
         mcpRepository.toggleModule(name)
+    }
+
+    /** Toggle floating window overlay */
+    fun toggleFloatingWindow() {
+        if (_floatingWindowEnabled.value) {
+            hideFloatingWindow()
+        } else {
+            showFloatingWindow()
+        }
+    }
+
+    fun showFloatingWindow() {
+        val ctx = appRepository.context
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(ctx)) {
+            mcpRepository.addLog(LogLevel.WARNING, "FloatingWindow", "需要悬浮窗权限 — 请在设置中开启")
+            return
+        }
+        val intent = Intent(ctx, FloatingWindowService::class.java)
+        intent.action = FloatingWindowService.ACTION_SHOW
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            ctx.startForegroundService(intent)
+        } else {
+            ctx.startService(intent)
+        }
+        _floatingWindowEnabled.value = true
+        mcpRepository.addLog(LogLevel.INFO, "FloatingWindow", "悬浮窗已显示")
+    }
+
+    fun hideFloatingWindow() {
+        val ctx = appRepository.context
+        val intent = Intent(ctx, FloatingWindowService::class.java)
+        intent.action = FloatingWindowService.ACTION_HIDE
+        ctx.startService(intent)
+        ctx.stopService(Intent(ctx, FloatingWindowService::class.java))
+        _floatingWindowEnabled.value = false
+        mcpRepository.addLog(LogLevel.INFO, "FloatingWindow", "悬浮窗已隐藏")
     }
 
     fun launchApp(packageName: String) {

@@ -16,6 +16,7 @@
         android:maxSdkVersion="32" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
     <application
         android:name=".FridaMCPApplication"
@@ -52,6 +53,11 @@
             android:name=".data.service.FridaService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <!-- Floating Window Service -->
+        <service
+            android:name=".data.service.FloatingWindowService"
+            android:exported="false" />
 
     </application>
 </manifest>

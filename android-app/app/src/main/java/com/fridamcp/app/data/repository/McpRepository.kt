@@ -12,7 +12,7 @@ class McpRepository(private val context: Context) {
     private val _serverStatus = MutableStateFlow(
         MCPServerStatus(
             running = false,
-            host = "0.0.0.0",
+            host = "127.0.0.1",
             port = 8768,
             transport = "sse",
             startTime = 0,
@@ -52,7 +52,9 @@ class McpRepository(private val context: Context) {
             running = true,
             startTime = System.currentTimeMillis(),
         )
-        addLog(LogLevel.INFO, "McpServer", "MCP 服务器已启动 — 监听 ${_serverStatus.value.host}:${_serverStatus.value.port}")
+        addLog(LogLevel.INFO, "McpServer", "MCP 服务器已启动 — 监听 127.0.0.1:${_serverStatus.value.port}")
+        addLog(LogLevel.INFO, "McpServer", "端点: http://127.0.0.1:${_serverStatus.value.port}/sse (SSE)")
+        addLog(LogLevel.INFO, "McpServer", "端点: http://127.0.0.1:${_serverStatus.value.port}/mcp (JSON-RPC)")
 
         // Start the foreground service
         try {
