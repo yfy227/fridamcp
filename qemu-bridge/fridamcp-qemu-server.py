@@ -156,6 +156,13 @@ def get_tools_list():
         {"name": "frida_list_modules", "description": "List loaded modules of a process", "params": {"pid": "integer"}},
         {"name": "frida_test", "description": "Run frida self-test (hook sleep + memory read + process enum)"},
         {"name": "frida_inject_gadget", "description": "Inject frida-gadget into arm64 binary and return port", "params": {"binary_path": "string"}},
+        # 高级 JS 脚本加载
+        {"name": "frida_load_script", "description": "加载 JS 脚本到进程 (支持内联脚本/文件路径), 返回所有 hook 消息", "params": {"pid": "integer", "script": "string", "script_file": "string", "timeout": "integer"}},
+        {"name": "frida_hook_function", "description": "Hook 指定模块的函数 (Interceptor.attach)", "params": {"pid": "integer", "module": "string", "function": "string", "on_enter": "string", "on_leave": "string", "timeout": "integer"}},
+        {"name": "frida_replace_function", "description": "替换函数实现 (Interceptor.replace)", "params": {"pid": "integer", "module": "string", "function": "string", "replacement": "string", "timeout": "integer"}},
+        {"name": "frida_call_export", "description": "调用模块导出函数", "params": {"pid": "integer", "module": "string", "function": "string", "args": "string"}},
+        {"name": "frida_scan_memory", "description": "扫描进程内存中的模式匹配", "params": {"pid": "integer", "pattern": "string", "module": "string", "max_results": "integer"}},
+        {"name": "frida_trace_classes", "description": "Hook arm64 进程的 Java 类方法 (需 frida-gadget)", "params": {"binary_path": "string", "class_pattern": "string", "timeout": "integer"}},
     ]
     return tools
 
@@ -412,6 +419,229 @@ def handle_tool_call(name, args):
         except Exception as e:
             return f"Error: {e}"
 
+    # ==========================================
+    # 高级 JS 脚本加载工具
+    # ==========================================
+
+    elif name == "frida_load_script":
+        """加载 JS 脚本到指定进程 — 核心功能
+        支持内联脚本或文件路径，返回所有 send() 消息"""
+        pid = args.get("pid", 0)
+        script_code = args.get("script", "")
+        script_file = args.get("script_file", "")
+        timeout = args.get("timeout", 5)
+
+        # 从文件加载脚本
+        if script_file and not script_code:
+            try:
+                # 支持 rootfs 内的路径
+                if script_file.startswith("/system") or script_file.startswith("/data"):
+                    real_path = f"{ROOTFS}{script_file}"
+                else:
+                    real_path = script_file
+                with open(real_path, 'r') as f:
+                    script_code = f.read()
+            except Exception as e:
+                return json.dumps({"error": f"Cannot read script file: {e}"}, ensure_ascii=False)
+
+        if not script_code:
+            return json.dumps({"error": "No script provided. Use 'script' or 'script_file' parameter."}, ensure_ascii=False)
+
+        results = frida_hook_process(pid, script_code, timeout)
+        return json.dumps(results, indent=2, ensure_ascii=False)
+
+    elif name == "frida_hook_function":
+        """Hook 指定模块的导出函数 — Interceptor.attach 的封装"""
+        pid = args.get("pid", 0)
+        module_name = args.get("module", "libc.so.6")
+        func_name = args.get("function", "")
+        on_enter = args.get("on_enter", "send({type:'enter', args: [args[0], args[1], args[2]]})")
+        on_leave = args.get("on_leave", "send({type:'leave', retval: retval})")
+        timeout = args.get("timeout", 5)
+
+        if not func_name:
+            return json.dumps({"error": "function parameter required"}, ensure_ascii=False)
+
+        script_code = f"""
+        var mod = Process.findModuleByName("{module_name}");
+        if (!mod) {{
+            send({{type: "error", msg: "Module not found: {module_name}"}});
+        }} else {{
+            var addr = mod.findExportByName("{func_name}");
+            if (!addr) {{
+                send({{type: "error", msg: "Function not found: {func_name} in {module_name}"}});
+            }} else {{
+                Interceptor.attach(addr, {{
+                    onEnter: function(args) {{
+                        try {{ {on_enter} }} catch(e) {{ send({{type:"enter_error", err:e.toString()}}) }}
+                    }},
+                    onLeave: function(retval) {{
+                        try {{ {on_leave} }} catch(e) {{ send({{type:"leave_error", err:e.toString()}}) }}
+                    }}
+                }});
+                send({{type: "hook_installed", module: "{module_name}", function: "{func_name}", addr: addr.toString()}});
+            }}
+        }}
+        """
+
+        results = frida_hook_process(pid, script_code, timeout)
+        return json.dumps(results, indent=2, ensure_ascii=False)
+
+    elif name == "frida_replace_function":
+        """替换函数实现 — Interceptor.replace"""
+        pid = args.get("pid", 0)
+        module_name = args.get("module", "libc.so.6")
+        func_name = args.get("function", "")
+        replacement = args.get("replacement", "")
+        timeout = args.get("timeout", 3)
+
+        if not func_name or not replacement:
+            return json.dumps({"error": "function and replacement required"}, ensure_ascii=False)
+
+        script_code = f"""
+        var mod = Process.findModuleByName("{module_name}");
+        if (!mod) {{ send({{error: "Module not found: {module_name}"}}); }}
+        else {{
+            var orig = mod.findExportByName("{func_name}");
+            if (!orig) {{ send({{error: "Function not found: {func_name}"}}); }}
+            else {{
+                var origCall = new NativeFunction(orig, 'int', ['int']);
+                Interceptor.replace(orig, new NativeCallback(function() {{
+                    {replacement}
+                }}, 'int', ['int']));
+                send({{type: "replaced", function: "{func_name}", addr: orig.toString()}});
+            }}
+        }}
+        """
+
+        results = frida_hook_process(pid, script_code, timeout)
+        return json.dumps(results, indent=2, ensure_ascii=False)
+
+    elif name == "frida_call_export":
+        """调用模块导出函数"""
+        pid = args.get("pid", 0)
+        module_name = args.get("module", "libc.so.6")
+        func_name = args.get("function", "")
+        call_args = args.get("args", "[]")
+
+        if not func_name:
+            return json.dumps({"error": "function parameter required"}, ensure_ascii=False)
+
+        script_code = f"""
+        var mod = Process.findModuleByName("{module_name}");
+        if (!mod) {{ send({{error: "Module not found"}}); }}
+        else {{
+            var addr = mod.findExportByName("{func_name}");
+            if (!addr) {{ send({{error: "Export not found: {func_name}"}}); }}
+            else {{
+                // 自动推断参数个数 (最多8个)
+                var fn = new NativeFunction(addr, 'pointer', ['pointer','pointer','pointer','pointer','pointer','pointer','pointer','pointer']);
+                var args = {call_args};
+                var a = [];
+                for (var i = 0; i < 8; i++) {{
+                    a.push(args[i] ? ptr(args[i]) : ptr(0));
+                }}
+                var ret = fn(a[0], a[1], a[2], a[3], a[4], a[5], a[6], a[7]);
+                send({{type: "call_result", function: "{func_name}", ret: ret.toString()}});
+            }}
+        }}
+        """
+
+        results = frida_hook_process(pid, script_code, 3)
+        return json.dumps(results, indent=2, ensure_ascii=False)
+
+    elif name == "frida_scan_memory":
+        """扫描进程内存中的模式匹配 (Memory.scan)"""
+        pid = args.get("pid", 0)
+        pattern = args.get("pattern", "")
+        module_name = args.get("module", "")
+        max_results = args.get("max_results", 10)
+
+        if not pattern:
+            return json.dumps({"error": "pattern parameter required (hex pattern like '7f 45 4c 46')"}, ensure_ascii=False)
+
+        scan_range = ""
+        if module_name:
+            scan_range = f"""
+            var mod = Process.findModuleByName("{module_name}");
+            if (!mod) {{ send({{error: "Module not found"}}); }}
+            else {{
+                Memory.scan(mod.base, mod.size, "{pattern}", {{
+                    onMatch: function(addr, size) {{
+                        send({{type:"match", addr: addr.toString(), size: size}});
+                        count++;
+                        if (count >= {max_results}) return 'stop';
+                    }},
+                    onComplete: function() {{ send({{type:"complete", found: count}}); }}
+                }});
+            }}
+            """
+        else:
+            scan_range = f"""
+            var ranges = Process.enumerateRanges('r--');
+            var count = 0;
+            var found = 0;
+            function scanNext(i) {{
+                if (i >= ranges.length || found >= {max_results}) {{
+                    send({{type:"complete", found: found, scanned: i}});
+                    return;
+                }}
+                var r = ranges[i];
+                Memory.scan(r.base, r.size, "{pattern}", {{
+                    onMatch: function(addr, size) {{
+                        found++;
+                        send({{type:"match", addr: addr.toString(), size: size, range_base: r.base.toString()}});
+                    }},
+                    onComplete: function() {{ scanNext(i + 1); }}
+                }});
+            }}
+            scanNext(0);
+            """
+
+        script_code = f"""
+        var count = 0;
+        {scan_range}
+        send({{type: "scan_started", pattern: "{pattern}", module: "{module_name}"}})
+        """
+
+        results = frida_hook_process(pid, script_code, 5)
+        return json.dumps(results, indent=2, ensure_ascii=False)
+
+    elif name == "frida_trace_classes":
+        """Hook arm64 进程的 Java 类方法 (需 frida-gadget)"""
+        binary_path = args.get("binary_path", "/system/bin/toybox")
+        class_pattern = args.get("class_pattern", "*")
+        timeout = args.get("timeout", 5)
+
+        script_code = f"""
+        send({{type: "status", msg: "gadget connected", arch: Process.arch}});
+
+        // 尝试枚举 Java 类 (需要 Android runtime)
+        if (typeof Java !== 'undefined') {{
+            Java.perform(function() {{
+                send({{type: "java_available"}});
+                try {{
+                    var classes = Java.enumerateLoadedClassesSync();
+                    var matched = classes.filter(function(c) {{
+                        return c.match(/{class_pattern}/);
+                    }});
+                    send({{type: "classes", total: classes.length, matched: matched.length, samples: matched.slice(0, 20)}});
+                }} catch(e) {{
+                    send({{type: "error", msg: e.toString()}});
+                }}
+            }});
+        }} else {{
+            send({{type: "error", msg: "Java runtime not available in qemu-user mode"}});
+        }}
+
+        // 列出 native 模块
+        var mods = Process.enumerateModules();
+        send({{type: "modules", count: mods.length, names: mods.map(m => m.name).slice(0, 10)}});
+        """
+
+        results = frida_hook_arm64(binary_path, script_code, timeout)
+        return json.dumps(results, indent=2, ensure_ascii=False)
+
     return f"Unknown tool: {name}"
 
 
@@ -433,7 +663,7 @@ class MCPHandler(http.server.BaseHTTPRequestHandler):
                 "version": "2.0",
                 "status": "running",
                 "port": PORT,
-                "tools": 18,
+                "tools": 24,
                 "frida_gadget_port": GADGET_PORT
             }).encode())
         else:
@@ -518,6 +748,6 @@ if __name__ == "__main__":
     print(f"SSE:  http://127.0.0.1:{PORT}/sse")
     print(f"POST: http://127.0.0.1:{PORT}/mcp")
     print(f"Rootfs: {ROOTFS}")
-    print(f"Tools: 18 (9 base + 9 frida hook)")
+    print(f"Tools: 24 (9 base + 9 frida hook + 6 advanced JS)")
     print(f"Frida gadget port: {GADGET_PORT}")
     server.serve_forever()
