@@ -53,8 +53,10 @@ class McpRepository(private val context: Context) {
             startTime = System.currentTimeMillis(),
         )
         addLog(LogLevel.INFO, "McpServer", "MCP 服务器已启动 — 监听 127.0.0.1:${_serverStatus.value.port}")
-        addLog(LogLevel.INFO, "McpServer", "端点: http://127.0.0.1:${_serverStatus.value.port}/sse (SSE)")
-        addLog(LogLevel.INFO, "McpServer", "端点: http://127.0.0.1:${_serverStatus.value.port}/mcp (JSON-RPC)")
+        addLog(LogLevel.INFO, "McpServer", "SSE 端点: http://127.0.0.1:${_serverStatus.value.port}/sse")
+        addLog(LogLevel.INFO, "McpServer", "消息端点: http://127.0.0.1:${_serverStatus.value.port}/messages?session_id=xxx")
+        addLog(LogLevel.INFO, "McpServer", "HTTP 端点: http://127.0.0.1:${_serverStatus.value.port}/mcp")
+        addLog(LogLevel.INFO, "McpServer", "AI 工具配置 URL: http://127.0.0.1:${_serverStatus.value.port}/sse")
 
         // Start the foreground service
         try {

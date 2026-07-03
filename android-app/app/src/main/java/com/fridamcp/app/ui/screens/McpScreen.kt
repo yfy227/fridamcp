@@ -171,8 +171,9 @@ fun McpScreen(
                     Text("连接信息", style = MaterialTheme.typography.titleMedium, color = Foreground)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("SSE:  http://127.0.0.1:${serverStatus.port}/sse", style = MaterialTheme.typography.bodySmall, color = Primary)
-                    Text("RPC:  http://127.0.0.1:${serverStatus.port}/mcp", style = MaterialTheme.typography.bodySmall, color = Primary)
-                    Text("状态: http://127.0.0.1:${serverStatus.port}/", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+                    Text("POST: http://127.0.0.1:${serverStatus.port}/messages?session_id=xxx", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+                    Text("HTTP: http://127.0.0.1:${serverStatus.port}/mcp", style = MaterialTheme.typography.bodySmall, color = Primary)
+                    Text("健康: http://127.0.0.1:${serverStatus.port}/", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
                 }
             }
         }
