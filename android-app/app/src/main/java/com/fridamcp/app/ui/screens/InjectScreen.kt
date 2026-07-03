@@ -1,6 +1,7 @@
 package com.fridamcp.app.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,8 +36,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.activity.compose.rememberLauncherForActivityResult
 import com.fridamcp.app.data.model.InjectionTaskStatus
 import com.fridamcp.app.ui.theme.Background
 import com.fridamcp.app.ui.theme.CardElevated
@@ -58,6 +61,34 @@ fun InjectScreen(
     var packageName by remember { mutableStateOf("") }
     var useApktool by remember { mutableStateOf(true) }
     var arch by remember { mutableStateOf("arm64-v8a") }
+
+    // File picker launcher
+    val pickApk = rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            // Copy URI to a temp file path for processing
+            try {
+                val ctx = LocalContext.current
+                val input = ctx.contentResolver.openInputStream(uri)
+                if (input != null) {
+                    val tempFile = java.io.File(ctx.cacheDir, "temp_${System.currentTimeMillis()}.apk")
+                    java.io.FileOutputStream(tempFile).use { out -> input.copyTo(out) }
+                    input.close()
+                    apkPath = tempFile.absolutePath
+                    // Try to extract app name and package name from APK
+                    try {
+                        val pm = ctx.packageManager
+                        val info = pm.getPackageArchiveInfo(tempFile.absolutePath, 0)
+                        if (info != null) {
+                            if (appName.isBlank()) appName = pm.getApplicationLabel(info.applicationInfo).toString()
+                            if (packageName.isBlank()) packageName = info.packageName
+                        }
+                    } catch (e: Exception) { }
+                }
+            } catch (e: Exception) { }
+        }
+    }
 
     Column(
         modifier = modifier
@@ -92,14 +123,27 @@ fun InjectScreen(
                     ) {
                         Text("注入配置", style = MaterialTheme.typography.titleLarge, color = Foreground)
 
-                        OutlinedTextField(
-                            value = apkPath,
-                            onValueChange = { apkPath = it },
-                            label = { Text("APK 文件路径") },
+                        Row(
                             modifier = Modifier.fillMaxWidth(),
-                            singleLine = true,
-                            shape = RoundedCornerShape(12.dp),
-                        )
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            verticalAlignment = Alignment.Bottom,
+                        ) {
+                            OutlinedTextField(
+                                value = apkPath,
+                                onValueChange = { apkPath = it },
+                                label = { Text("APK 文件路径") },
+                                modifier = Modifier.weight(1f),
+                                singleLine = true,
+                                shape = RoundedCornerShape(12.dp),
+                            )
+                            Button(
+                                onClick = { pickApk.launch(arrayOf("application/vnd.android.package-archive")) },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = ButtonDefaults.buttonColors(containerColor = CardElevated),
+                            ) {
+                                Text("选择", color = Primary, style = MaterialTheme.typography.labelLarge)
+                            }
+                        }
 
                         OutlinedTextField(
                             value = appName,
@@ -191,8 +235,8 @@ private fun ArchChip(label: String, selected: Boolean, onClick: () -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(8.dp))
             .background(bg)
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-            .clip(RoundedCornerShape(8.dp)),
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
     ) {
         Text(label, style = MaterialTheme.typography.labelLarge, color = fg)
     }

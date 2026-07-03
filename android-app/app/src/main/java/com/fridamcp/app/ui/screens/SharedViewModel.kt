@@ -131,10 +131,23 @@ class SharedViewModel(
         when (app.mcpStatus) {
             MCPServiceStatus.ONLINE -> {
                 appRepository.updateAppStatus(app.packageName, app.injectionStatus, MCPServiceStatus.OFFLINE)
+                mcpRepository.removeSession(app.packageName)
                 mcpRepository.addLog(LogLevel.INFO, "McpServer", "已断开 MCP 会话: ${app.packageName}")
             }
             else -> {
+                // Launch the app first if not running
+                try {
+                    val launchIntent = appRepository.context.packageManager.getLaunchIntentForPackage(app.packageName)
+                    if (launchIntent != null) {
+                        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        appRepository.context.startActivity(launchIntent)
+                        mcpRepository.addLog(LogLevel.INFO, "ProcessManager", "已启动: ${app.packageName}")
+                    }
+                } catch (e: Exception) {
+                    mcpRepository.addLog(LogLevel.WARNING, "ProcessManager", "启动失败: ${e.message}")
+                }
                 appRepository.updateAppStatus(app.packageName, InjectionStatus.RUNNING, MCPServiceStatus.ONLINE)
+                mcpRepository.addSession(app.packageName, app.appName)
                 mcpRepository.addLog(LogLevel.INFO, "McpServer", "已创建 MCP 会话: ${app.packageName}")
             }
         }
@@ -143,7 +156,15 @@ class SharedViewModel(
     fun removeInjection(app: AppInfo) {
         appRepository.updateAppStatus(app.packageName, InjectionStatus.NOT_INJECTED, null)
         refreshInjectedCount()
-        mcpRepository.addLog(LogLevel.WARNING, "Injector", "已移除注入标记: ${app.packageName} (需卸载重装)")
+        try {
+            val intent = Intent(Intent.ACTION_DELETE)
+            intent.data = android.net.Uri.parse("package:${app.packageName}")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            appRepository.context.startActivity(intent)
+            mcpRepository.addLog(LogLevel.WARNING, "Injector", "正在卸载已注入应用: ${app.packageName}")
+        } catch (e: Exception) {
+            mcpRepository.addLog(LogLevel.WARNING, "Injector", "已移除标记: ${app.packageName} (需手动卸载)")
+        }
     }
 
     fun startInjection(
@@ -155,11 +176,43 @@ class SharedViewModel(
     ): InjectionTask {
         mcpRepository.addLog(LogLevel.INFO, "ApkInjector", "开始注入: $appName ($packageName) [$arch]")
         val task = mcpRepository.createInjectionTask(apkPath, appName, packageName, arch, useApktool)
-        // Simulate injection progress
-        mcpRepository.updateTask(task.id, 100, InjectionTaskStatus.DONE, outputApk = "${apkPath.removeSuffix(".apk")}_injected.apk")
-        appRepository.addInjectedApp(task.copy(outputApk = "${apkPath.removeSuffix(".apk")}_injected.apk"))
-        refreshInjectedCount()
-        mcpRepository.addLog(LogLevel.INFO, "ApkInjector", "注入完成: $appName ($packageName) [$arch]")
+
+        // Run injection in background
+        Thread {
+            try {
+                val injector = com.fridamcp.app.data.service.ApkInjector(appRepository.context)
+
+                // Step 1: Detect arch
+                mcpRepository.updateTask(task.id, 10, InjectionTaskStatus.INJECTING)
+                mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "检测 APK 架构...")
+                val detectedArch = injector.detectArch(apkPath) ?: arch
+                mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "架构: $detectedArch")
+
+                // Step 2: Inject gadget
+                mcpRepository.updateTask(task.id, 30, InjectionTaskStatus.INJECTING)
+                mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "注入 frida-gadget...")
+
+                val outputApk = "${apkPath.removeSuffix(".apk")}_injected.apk"
+                val result = injector.inject(apkPath, outputApk, detectedArch, useApktool)
+
+                when (result) {
+                    is com.fridamcp.app.data.service.ApkInjector.Result.Success -> {
+                        mcpRepository.updateTask(task.id, 100, InjectionTaskStatus.DONE, outputApk = result.outputPath)
+                        appRepository.addInjectedApp(task.copy(outputApk = result.outputPath))
+                        refreshInjectedCount()
+                        mcpRepository.addLog(LogLevel.INFO, "ApkInjector", "注入完成: $appName → ${result.outputPath}")
+                    }
+                    is com.fridamcp.app.data.service.ApkInjector.Result.Error -> {
+                        mcpRepository.updateTask(task.id, 0, InjectionTaskStatus.ERROR)
+                        mcpRepository.addLog(LogLevel.ERROR, "ApkInjector", "注入失败: ${result.message}")
+                    }
+                }
+            } catch (e: Exception) {
+                mcpRepository.updateTask(task.id, 0, InjectionTaskStatus.ERROR)
+                mcpRepository.addLog(LogLevel.ERROR, "ApkInjector", "注入异常: ${e.message}")
+            }
+        }.start()
+
         return task
     }
 }

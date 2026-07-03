@@ -17,7 +17,7 @@ class McpRepository(private val context: Context) {
             transport = "sse",
             startTime = 0,
             activeSessions = 0,
-            totalTools = 42,
+            totalTools = 7,
             connectedClients = 0,
         )
     )
@@ -93,6 +93,31 @@ class McpRepository(private val context: Context) {
         _modules.value = _modules.value.map { m ->
             if (m.name == name) m.copy(enabled = !m.enabled) else m
         }
+    }
+
+    fun addSession(packageName: String, appName: String) {
+        val session = MCPSession(
+            id = "sess-${System.currentTimeMillis()}",
+            pid = 0,
+            appName = appName,
+            packageName = packageName,
+            state = "attached",
+            createdAt = System.currentTimeMillis(),
+            scriptCount = 0,
+            hookCount = 0,
+            messageCount = 0,
+        )
+        _sessions.value = _sessions.value + session
+        _serverStatus.value = _serverStatus.value.copy(
+            activeSessions = _sessions.value.size,
+        )
+    }
+
+    fun removeSession(packageName: String) {
+        _sessions.value = _sessions.value.filter { it.packageName != packageName }
+        _serverStatus.value = _serverStatus.value.copy(
+            activeSessions = _sessions.value.size,
+        )
     }
 
     /** Create injection task */
