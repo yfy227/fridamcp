@@ -20,9 +20,6 @@
     <uses-permission android:name="android.permission.READ_LOGS"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- Shizuku permission -->
-    <uses-permission android:name="moe.shizuku.manager.permission.API_V23" />
-
     <application
         android:name=".FridaMCPApplication"
         android:allowBackup="false"
@@ -63,15 +60,6 @@
         <service
             android:name=".data.service.FloatingWindowService"
             android:exported="false" />
-
-        <!-- Shizuku Provider -->
-        <provider
-            android:name="rikka.shizuku.ShizukuProvider"
-            android:authorities="${applicationId}.shizuku"
-            android:multiprocess="false"
-            android:enabled="true"
-            android:exported="true"
-            android:permission="android.permission.INTERACT_ACROSS_USERS_FULL" />
 
     </application>
 </manifest>

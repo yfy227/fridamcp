@@ -22,6 +22,9 @@ class FridaMCPApplication : Application() {
         deviceRepository = DeviceRepository(this)
         mcpRepository = McpRepository(this)
 
+        // Initialize permission detection
+        com.fridamcp.app.data.service.ShizukuManager.init(this)
+
         createNotificationChannels()
     }
 

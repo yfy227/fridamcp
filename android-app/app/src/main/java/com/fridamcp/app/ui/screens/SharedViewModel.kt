@@ -119,8 +119,9 @@ class SharedViewModel(
 
     fun requestShizuku() {
         try {
-            com.fridamcp.app.data.service.ShizukuManager.requestShizukuPermission()
-            mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在请求 Shizuku 授权...")
+            com.fridamcp.app.data.service.ShizukuManager.requestShizukuPermission(appRepository.context)
+            com.fridamcp.app.data.service.ShizukuManager.init(appRepository.context)
+            mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在打开 Shizuku 授权...")
         } catch (e: Exception) {
             mcpRepository.addLog(LogLevel.ERROR, "Shizuku", "请求失败: ${e.message}")
         }
@@ -128,8 +129,7 @@ class SharedViewModel(
 
     fun openShizukuSettings() {
         try {
-            val ctx = appRepository.context
-            ctx.startActivity(com.fridamcp.app.data.service.ShizukuManager.getShizukuSettingsIntent())
+            appRepository.context.startActivity(com.fridamcp.app.data.service.ShizukuManager.getShizukuSettingsIntent())
         } catch (e: Exception) {
             mcpRepository.addLog(LogLevel.ERROR, "Shizuku", "打开设置失败: ${e.message} — 请先安装 Shizuku")
         }
