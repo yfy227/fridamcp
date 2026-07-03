@@ -9,7 +9,6 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.fridamcp.app.FridaMCPApplication
 import com.fridamcp.app.R
-import java.io.File
 
 /**
  * Frida 引擎前台服务
@@ -19,6 +18,11 @@ import java.io.File
  * 2. 如果有 root，可以启动/停止 frida-server
  * 3. 检测 frida-gadget 进程
  * 4. 提供状态查询
+ *
+ * 实际功能委托给 ShizukuManager：
+ * - startFridaServer(): 查找并启动 frida-server 二进制
+ * - stopFridaServer(): pkill frida-server
+ * - isFridaServerRunning(): /proc 扫描
  */
 class FridaService : Service() {
 
@@ -26,28 +30,24 @@ class FridaService : Service() {
         const val ACTION_START = "com.fridamcp.app.START_FRIDA"
         const val ACTION_STOP = "com.fridamcp.app.STOP_FRIDA"
         const val ACTION_CHECK = "com.fridamcp.app.CHECK_FRIDA"
-        private const val NOTIF_ID = 2001
+        private const val NOTIF_ID = 2002
         private const val TAG = "FridaService"
-    }
-
-    override fun onCreate() {
-        super.onCreate()
-        Log.i(TAG, "FridaService created")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> startFrida()
-            ACTION_STOP -> { stopFrida(); stopSelf() }
+            ACTION_STOP -> stopFrida()
             ACTION_CHECK -> checkFrida()
         }
-        return START_STICKY
+        return START_NOT_STICKY
     }
 
     private fun startFrida() {
-        val notification = NotificationCompat.Builder(this, FridaMCPApplication.CHANNEL_FRIDA)
-            .setContentTitle(getString(R.string.frida_running))
-            .setContentText("Frida 引擎运行中")
+        // 前台通知
+        val notification = NotificationCompat.Builder(this, FridaMCPApplication.CHANNEL_MCP)
+            .setContentTitle("Frida Engine")
+            .setContentText("Starting frida-server...")
             .setSmallIcon(R.drawable.ic_launcher_foreground)
             .setOngoing(true)
             .build()
@@ -58,58 +58,48 @@ class FridaService : Service() {
             startForeground(NOTIF_ID, notification)
         }
 
-        if (isFridaServerRunning()) {
-            Log.i(TAG, "frida-server already running")
+        // 刷新权限状态
+        ShizukuManager.refresh()
+
+        if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
+            Log.e(TAG, "No root or shizuku permission — cannot start frida-server")
+            stopSelf()
             return
         }
 
-        val mode = ShizukuManager.currentMode
-        if (mode == ShizukuManager.PermissionMode.ROOT) {
-            val paths = listOf("/data/local/tmp/frida-server", "/system/bin/frida-server", "/system/xbin/frida-server", "/sbin/frida-server")
-            var started = false
-            for (path in paths) {
-                if (File(path).exists()) {
-                    Log.i(TAG, "Starting frida-server from: $path")
-                    Runtime.getRuntime().exec(arrayOf("su", "-c", "$path -D &"))
-                    started = true
-                    break
-                }
-            }
-            if (!started) Log.w(TAG, "frida-server binary not found on device")
+        // 启动 frida-server
+        val started = ShizukuManager.startFridaServer()
+        if (started) {
+            Log.i(TAG, "frida-server started successfully")
+            // 更新通知
+            val notif = NotificationCompat.Builder(this, FridaMCPApplication.CHANNEL_MCP)
+                .setContentTitle("Frida Engine")
+                .setContentText("frida-server running")
+                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setOngoing(true)
+                .build()
+            startForeground(NOTIF_ID, notif)
         } else {
-            Log.w(TAG, "Cannot start frida-server without root — mode: $mode")
+            Log.e(TAG, "Failed to start frida-server")
+            stopSelf()
         }
-        Log.i(TAG, "Frida engine service started")
     }
 
     private fun stopFrida() {
+        ShizukuManager.refresh()
         if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.ROOT) {
-            try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "pkill -f frida-server"))
-                Log.i(TAG, "frida-server stopped")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to stop frida-server", e)
-            }
+            val stopped = ShizukuManager.stopFridaServer()
+            Log.i(TAG, "frida-server stopped: $stopped")
+        } else {
+            Log.w(TAG, "Cannot stop frida-server without root")
         }
-        Log.i(TAG, "Frida engine stopped")
+        stopSelf()
     }
 
     private fun checkFrida() {
-        Log.i(TAG, "frida-server running: ${isFridaServerRunning()}")
-    }
-
-    private fun isFridaServerRunning(): Boolean {
-        return try {
-            val procDir = File("/proc")
-            val processDirs = procDir.listFiles { f: File -> f.name.matches(Regex("\\d+")) } ?: emptyArray()
-            for (procDir in processDirs) {
-                try {
-                    val cmdline = File(procDir, "cmdline").readText().trimEnd('\u0000')
-                    if (cmdline.contains("frida-server") || cmdline.contains("frida_server")) return true
-                } catch (e: Exception) { continue }
-            }
-            false
-        } catch (e: Exception) { false }
+        val running = ShizukuManager.isFridaServerRunning()
+        val version = ShizukuManager.getFridaVersion()
+        Log.i(TAG, "frida-server running: $running, version: $version")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

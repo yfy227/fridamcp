@@ -11,6 +11,7 @@ import com.fridamcp.app.data.repository.AppRepository
 import com.fridamcp.app.data.repository.DeviceRepository
 import com.fridamcp.app.data.repository.McpRepository
 import com.fridamcp.app.data.service.FloatingWindowService
+import com.fridamcp.app.data.service.ShizukuManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -38,7 +39,7 @@ class SharedViewModel(
 
     init {
         // Load real data at startup — device detection is fast (no I/O)
-        deviceRepository.detectDevice()
+        deviceRepository.refresh()
         // App loading scans all APKs — defer to background thread to avoid ANR
         Thread {
             appRepository.loadInstalledApps()
@@ -113,18 +114,78 @@ class SharedViewModel(
     }
 
     // === Shizuku / Root ===
-    val permissionMode: String get() = com.fridamcp.app.data.service.ShizukuManager.currentMode.toString()
-    val shizukuAuthorized: Boolean get() = com.fridamcp.app.data.service.ShizukuManager.isShizukuAuthorized()
-    val rootAvailable: Boolean get() = com.fridamcp.app.data.service.ShizukuManager.isRootAvailable()
+    val permissionMode: String get() = ShizukuManager.currentMode.toString()
+    val shizukuAuthorized: Boolean get() = ShizukuManager.shizukuPermissionGranted
+    val shizukuBinderAlive: Boolean get() = ShizukuManager.shizukuBinderAlive
+    val rootAvailable: Boolean get() = ShizukuManager.rootGranted
+    val fridaServerRunning: Boolean get() = ShizukuManager.isFridaServerRunning()
+    val fridaVersion: String? get() = ShizukuManager.getFridaVersion()
+
+    private val _permissionRequestResult = MutableStateFlow<String?>(null)
+    val permissionRequestResult: StateFlow<String?> = _permissionRequestResult.asStateFlow()
 
     fun requestShizuku() {
-        try {
-            com.fridamcp.app.data.service.ShizukuManager.requestShizukuPermission(appRepository.context)
-            com.fridamcp.app.data.service.ShizukuManager.refresh()
-            mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在请求 Shizuku 授权... 当前模式: ${com.fridamcp.app.data.service.ShizukuManager.currentMode}")
-        } catch (e: Exception) {
-            mcpRepository.addLog(LogLevel.ERROR, "Shizuku", "请求失败: ${e.message}")
+        val ctx = appRepository.context
+        mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在请求 Shizuku 授权...")
+
+        ShizukuManager.requestShizukuPermission(ctx, object : ShizukuManager.PermissionResultCallback {
+            override fun onResult(granted: Boolean) {
+                ShizukuManager.refresh()
+                val mode = ShizukuManager.currentMode
+                if (granted) {
+                    _permissionRequestResult.value = "✅ Shizuku 授权成功 — 模式: $mode"
+                    mcpRepository.addLog(LogLevel.INFO, "Shizuku", "授权成功 — 模式: $mode")
+                } else {
+                    _permissionRequestResult.value = "❌ Shizuku 授权被拒绝 — 请在 Shizuku 应用中允许"
+                    mcpRepository.addLog(LogLevel.WARNING, "Shizuku", "授权被拒绝 — 请在 Shizuku 中手动允许")
+                }
+                // 刷新设备信息
+                deviceRepository.refresh()
+            }
+        })
+
+        // 也刷新一次状态
+        ShizukuManager.refresh()
+        if (!ShizukuManager.shizukuBinderAlive) {
+            _permissionRequestResult.value = "⚠️ Shizuku 未运行 — 请先启动 Shizuku 服务"
+            mcpRepository.addLog(LogLevel.WARNING, "Shizuku", "Binder 未连接 — 请先启动 Shizuku")
         }
+    }
+
+    fun refreshPermission() {
+        ShizukuManager.refresh()
+        deviceRepository.refresh()
+        mcpRepository.addLog(LogLevel.INFO, "Permission", ShizukuManager.getPermissionStatusText())
+    }
+
+    fun startFridaServer() {
+        ShizukuManager.refresh()
+        if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.ROOT) {
+            val started = ShizukuManager.startFridaServer()
+            if (started) {
+                mcpRepository.addLog(LogLevel.INFO, "FridaServer", "frida-server 已启动")
+            } else {
+                mcpRepository.addLog(LogLevel.ERROR, "FridaServer", "frida-server 启动失败 — 请检查是否已下载")
+            }
+        } else {
+            mcpRepository.addLog(LogLevel.WARNING, "FridaServer", "需要 Root 权限才能启动 frida-server")
+        }
+        deviceRepository.refresh()
+    }
+
+    fun stopFridaServer() {
+        ShizukuManager.refresh()
+        if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.ROOT) {
+            val stopped = ShizukuManager.stopFridaServer()
+            mcpRepository.addLog(
+                LogLevel.INFO,
+                "FridaServer",
+                if (stopped) "frida-server 已停止" else "frida-server 停止失败"
+            )
+        } else {
+            mcpRepository.addLog(LogLevel.WARNING, "FridaServer", "需要 Root 权限才能停止 frida-server")
+        }
+        deviceRepository.refresh()
     }
 
     fun openShizukuSettings() {

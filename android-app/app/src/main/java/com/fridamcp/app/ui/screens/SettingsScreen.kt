@@ -89,8 +89,10 @@ fun SettingsScreen(
                     Text("权限管理", style = MaterialTheme.typography.titleLarge, color = Foreground)
                     Spacer(modifier = Modifier.height(12.dp))
                     SettingRow("当前模式", viewModel.permissionMode)
-                    SettingRow("Shizuku", if (viewModel.shizukuAuthorized) "已授权" else "未授权")
-                    SettingRow("Root", if (viewModel.rootAvailable) "已获取" else "未获取")
+                    SettingRow("Shizuku Binder", if (viewModel.shizukuBinderAlive) "已连接" else "未连接")
+                    SettingRow("Shizuku 授权", if (viewModel.shizukuAuthorized) "已授权" else "未授权")
+                    SettingRow("Root (su 二进制)", if (com.fridamcp.app.data.service.ShizukuManager.isRootAvailable()) "存在" else "不存在")
+                    SettingRow("Root (已授权)", if (viewModel.rootAvailable) "是" else "否")
                     Spacer(modifier = Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(
@@ -103,10 +105,61 @@ fun SettingsScreen(
                             shape = RoundedCornerShape(8.dp),
                             colors = ButtonDefaults.buttonColors(containerColor = CardElevated),
                         ) { Text("打开 Shizuku", style = MaterialTheme.typography.labelLarge, color = Primary) }
+                        Button(
+                            onClick = { viewModel.refreshPermission() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = CardElevated),
+                        ) { Text("刷新", style = MaterialTheme.typography.labelLarge, color = Primary) }
+                    }
+                    // 权限请求结果
+                    viewModel.permissionRequestResult.value?.let { result ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(
+                            result,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (result.startsWith("✅")) Primary else if (result.startsWith("❌")) Error else MutedForeground,
+                        )
                     }
                     Spacer(modifier = Modifier.height(8.dp))
                     Text(
                         "Shizuku 提供 ADB 级别权限（杀进程、截图、UI 自动化）\nRoot 模式可读写内存、执行任意命令",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MutedForeground,
+                    )
+                }
+            }
+        }
+
+        // Frida Server 控制
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardElevated),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Frida Server", style = MaterialTheme.typography.titleLarge, color = Foreground)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    SettingRow("运行状态", if (viewModel.fridaServerRunning) "✅ 运行中" else "❌ 未运行")
+                    viewModel.fridaVersion?.let { SettingRow("版本", it) }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { viewModel.startFridaServer() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                            enabled = !viewModel.fridaServerRunning,
+                        ) { Text("启动", style = MaterialTheme.typography.labelLarge) }
+                        Button(
+                            onClick = { viewModel.stopFridaServer() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = CardElevated),
+                            enabled = viewModel.fridaServerRunning,
+                        ) { Text("停止", style = MaterialTheme.typography.labelLarge, color = Primary) }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "frida-server 需要 Root 权限\n请先下载对应架构的 frida-server 到 /data/local/tmp/",
                         style = MaterialTheme.typography.bodySmall,
                         color = MutedForeground,
                     )
