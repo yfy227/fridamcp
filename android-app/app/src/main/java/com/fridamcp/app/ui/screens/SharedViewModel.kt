@@ -112,6 +112,29 @@ class SharedViewModel(
         mcpRepository.addLog(LogLevel.INFO, "FloatingWindow", "悬浮窗已隐藏")
     }
 
+    // === Shizuku / Root ===
+    val permissionMode: String get() = com.fridamcp.app.data.service.ShizukuManager.currentMode.toString()
+    val shizukuAuthorized: Boolean get() = com.fridamcp.app.data.service.ShizukuManager.isShizukuAuthorized()
+    val rootAvailable: Boolean get() = com.fridamcp.app.data.service.ShizukuManager.isRootAvailable()
+
+    fun requestShizuku() {
+        try {
+            com.fridamcp.app.data.service.ShizukuManager.requestShizukuPermission()
+            mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在请求 Shizuku 授权...")
+        } catch (e: Exception) {
+            mcpRepository.addLog(LogLevel.ERROR, "Shizuku", "请求失败: ${e.message}")
+        }
+    }
+
+    fun openShizukuSettings() {
+        try {
+            val ctx = appRepository.context
+            ctx.startActivity(com.fridamcp.app.data.service.ShizukuManager.getShizukuSettingsIntent())
+        } catch (e: Exception) {
+            mcpRepository.addLog(LogLevel.ERROR, "Shizuku", "打开设置失败: ${e.message} — 请先安装 Shizuku")
+        }
+    }
+
     fun launchApp(packageName: String) {
         try {
             val intent = appRepository.context.packageManager.getLaunchIntentForPackage(packageName)

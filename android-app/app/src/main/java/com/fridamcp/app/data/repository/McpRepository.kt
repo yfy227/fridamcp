@@ -17,7 +17,7 @@ class McpRepository(private val context: Context) {
             transport = "sse",
             startTime = 0,
             activeSessions = 0,
-            totalTools = 7,
+            totalTools = 26,
             connectedClients = 0,
         )
     )

@@ -16,6 +16,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -72,6 +74,42 @@ fun SettingsScreen(
                     SettingRow("Root 状态", if (device.isRooted) "已获取" else "未获取")
                     SettingRow("Frida Server", if (device.fridaServerRunning) "运行中" else "未运行")
                     device.fridaServerVersion?.let { SettingRow("Frida 版本", it) }
+                }
+            }
+        }
+
+        // Shizuku / Root permission
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardElevated),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("权限管理", style = MaterialTheme.typography.titleLarge, color = Foreground)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    SettingRow("当前模式", viewModel.permissionMode)
+                    SettingRow("Shizuku", if (viewModel.shizukuAuthorized) "已授权" else "未授权")
+                    SettingRow("Root", if (viewModel.rootAvailable) "已获取" else "未获取")
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { viewModel.requestShizuku() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Primary),
+                        ) { Text("授权 Shizuku", style = MaterialTheme.typography.labelLarge) }
+                        Button(
+                            onClick = { viewModel.openShizukuSettings() },
+                            shape = RoundedCornerShape(8.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Card),
+                        ) { Text("打开 Shizuku", style = MaterialTheme.typography.labelLarge, color = Primary) }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "Shizuku 提供 ADB 级别权限（杀进程、截图、UI 自动化）\nRoot 模式可读写内存、执行任意命令",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MutedForeground,
+                    )
                 }
             }
         }
