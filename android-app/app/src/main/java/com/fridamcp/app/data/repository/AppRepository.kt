@@ -2,6 +2,7 @@ package com.fridamcp.app.data.repository
 
 import android.content.Context
 import android.content.pm.PackageManager
+import android.os.Build
 import com.fridamcp.app.data.model.*
 import com.fridamcp.app.data.service.InjectionDetector
 import com.fridamcp.app.ui.theme.AppIconColors
@@ -121,19 +122,37 @@ class AppRepository(val context: Context) {
 
     /** Add injected app to list */
     fun addInjectedApp(task: InjectionTask) {
+        // Try to get real info from the output APK
+        var realVersion = "unknown"
+        var realVersionCode = 1L
+        var realIconColor = 0xFF6366F1L
+        try {
+            val pm = context.packageManager
+            val info = pm.getPackageArchiveInfo(task.outputApk ?: "", 0)
+            if (info != null) {
+                realVersion = info.versionName ?: "unknown"
+                realVersionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    info.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    info.versionCode.toLong()
+                }
+            }
+        } catch (e: Exception) { }
+
         val newApp = AppInfo(
             id = "app-${System.currentTimeMillis()}",
             packageName = task.packageName,
             appName = task.appName,
-            version = "1.0.0",
-            versionCode = 10000,
-            iconColor = 0xFF6366F1,
+            version = realVersion,
+            versionCode = realVersionCode,
+            iconColor = realIconColor,
             iconText = task.appName.firstOrNull()?.toString() ?: "?",
             isSystem = false,
             installTime = System.currentTimeMillis(),
             updateTime = System.currentTimeMillis(),
             injectionStatus = InjectionStatus.INJECTED,
-            gadgetVersion = "16.5.1",
+            gadgetVersion = null,
             gadgetArch = task.arch,
             injectedAt = System.currentTimeMillis(),
             mcpStatus = MCPServiceStatus.OFFLINE,

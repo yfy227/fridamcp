@@ -132,8 +132,9 @@ class InjectionDetector(private val context: Context) {
     }
 
     private fun extractGadgetVersion(zip: ZipFile, entryName: String): String? {
-        // TODO: Parse gadget version from the .so file
-        return null
+        // Parse version from filename: libfrida-gadget-16.5.1-android-arm64.so
+        val match = Regex("""frida-gadget-(\d+\.\d+\.\d+)""").find(entryName)
+        return match?.groupValues?.getOrNull(1)
     }
 
     data class DetectionResult(

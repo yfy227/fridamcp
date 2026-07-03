@@ -1,6 +1,7 @@
 package com.fridamcp.app.data.service
 
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.util.Log
@@ -9,13 +10,12 @@ import java.io.File
 /**
  * 权限管理器 — Shizuku (ADB 级别) + Root 模式
  *
- * Shizuku 提供 ADB 级别权限，无需 root：
+ * Shizuku 提供 ADB 级别权限（无需 root）：
  * - am force-stop, pm install, input, screencap, dumpsys
+ * 通过 rikka.shizuku.api.Shizuku.newProcess() 执行命令
  *
- * Root 模式：直接 su -c 执行，权限更高：
+ * Root 模式：su -c 执行，权限更高
  * - 读写 /proc/pid/mem, kill -9, 任意文件
- *
- * 无 Shizuku 无 Root：只能执行不需要权限的命令
  */
 object ShizukuManager {
 
@@ -33,13 +33,23 @@ object ShizukuManager {
         private set
 
     /** 初始化：检测可用权限 */
-    fun init(context: android.content.Context) {
+    fun init(context: Context) {
         currentMode = when {
             isRootAvailable() -> PermissionMode.ROOT
-            isShizukuRunning(context) -> PermissionMode.SHIZUKU
+            isShizukuAuthorized() -> PermissionMode.SHIZUKU
             else -> PermissionMode.NONE
         }
         Log.i(TAG, "Permission mode: $currentMode")
+    }
+
+    /** 刷新权限状态 */
+    fun refresh() {
+        currentMode = when {
+            isRootAvailable() -> PermissionMode.ROOT
+            isShizukuAuthorized() -> PermissionMode.SHIZUKU
+            else -> PermissionMode.NONE
+        }
+        Log.i(TAG, "Permission mode refreshed: $currentMode")
     }
 
     /** 检测 Root */
@@ -48,11 +58,10 @@ object ShizukuManager {
         return paths.any { File(it).exists() }
     }
 
-    /** 检测 Shizuku 是否已安装并运行 */
-    fun isShizukuRunning(context: android.content.Context): Boolean {
+    /** 检测 Shizuku 是否已安装 */
+    fun isShizukuInstalled(context: Context): Boolean {
         return try {
-            val pm = context.packageManager
-            pm.getPackageInfo(SHIZUKU_PACKAGE, 0)
+            context.packageManager.getPackageInfo(SHIZUKU_PACKAGE, 0)
             true
         } catch (e: PackageManager.NameNotFoundException) {
             false
@@ -61,7 +70,12 @@ object ShizukuManager {
 
     /** 检测 Shizuku 是否已授权 */
     fun isShizukuAuthorized(): Boolean {
-        return currentMode == PermissionMode.SHIZUKU || currentMode == PermissionMode.ROOT
+        return try {
+            rikka.shizuku.api.Shizuku.pingBinder() &&
+                rikka.shizuku.api.Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /** 执行 shell 命令 — 根据权限模式选择执行方式 */
@@ -73,7 +87,7 @@ object ShizukuManager {
         }
     }
 
-    /** 直接执行 (无特殊权限) */
+    /** 直接执行 (无特殊权限 — 只有应用自身权限) */
     private fun execDirect(command: String): String {
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
@@ -88,9 +102,16 @@ object ShizukuManager {
 
     /** 通过 Shizuku 执行 (ADB 权限) */
     private fun execShizuku(command: String): String {
-        // Shizuku 的 newProcess API 通过 binder 调用
-        // 这里用 Runtime.exec 作为 fallback — Shizuku 模式下应用本身已有 ADB 权限
-        return execDirect(command)
+        return try {
+            val process = rikka.shizuku.api.Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
+            val output = process.inputStream.bufferedReader().readText()
+            val error = process.errorStream.bufferedReader().readText()
+            process.waitFor()
+            output + if (error.isNotBlank()) "\n$error" else ""
+        } catch (e: Exception) {
+            // Fallback to direct
+            execDirect(command)
+        }
     }
 
     /** 通过 su 执行 (Root 权限) */
@@ -102,19 +123,32 @@ object ShizukuManager {
             val code = process.waitFor()
             output + if (error.isNotBlank() && code != 0) "\n$error" else ""
         } catch (e: Exception) {
-            // Fallback to direct
             execDirect(command)
         }
     }
 
-    /** 请求 Shizuku 权限 — 打开 Shizuku App */
-    fun requestShizukuPermission(context: android.content.Context) {
+    /** 请求 Shizuku 权限 */
+    fun requestShizukuPermission(context: Context) {
+        try {
+            if (rikka.shizuku.api.Shizuku.shouldShowRequestPermissionRationale()) {
+                // Previously denied — open Shizuku settings
+                openShizukuSettings(context)
+            } else {
+                rikka.shizuku.api.Shizuku.requestPermission(0)
+            }
+        } catch (e: Exception) {
+            // Shizuku not running — open settings
+            openShizukuSettings(context)
+        }
+    }
+
+    /** 打开 Shizuku 设置 */
+    fun openShizukuSettings(context: Context) {
         try {
             val intent = getShizukuSettingsIntent()
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             context.startActivity(intent)
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to open Shizuku", e)
+            Log.e(TAG, "Shizuku not installed", e)
         }
     }
 

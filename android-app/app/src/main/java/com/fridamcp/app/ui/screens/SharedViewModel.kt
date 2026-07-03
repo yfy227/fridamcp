@@ -120,8 +120,8 @@ class SharedViewModel(
     fun requestShizuku() {
         try {
             com.fridamcp.app.data.service.ShizukuManager.requestShizukuPermission(appRepository.context)
-            com.fridamcp.app.data.service.ShizukuManager.init(appRepository.context)
-            mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在打开 Shizuku 授权...")
+            com.fridamcp.app.data.service.ShizukuManager.refresh()
+            mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在请求 Shizuku 授权... 当前模式: ${com.fridamcp.app.data.service.ShizukuManager.currentMode}")
         } catch (e: Exception) {
             mcpRepository.addLog(LogLevel.ERROR, "Shizuku", "请求失败: ${e.message}")
         }
