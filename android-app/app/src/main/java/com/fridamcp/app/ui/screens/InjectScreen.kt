@@ -49,6 +49,7 @@ import com.fridamcp.app.ui.theme.Success
 @Composable
 fun InjectScreen(
     viewModel: SharedViewModel,
+    modifier: Modifier = Modifier,
 ) {
     val tasks by viewModel.tasks.collectAsState()
 
@@ -59,7 +60,7 @@ fun InjectScreen(
     var arch by remember { mutableStateOf("arm64-v8a") }
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(Background),
     ) {

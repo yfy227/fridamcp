@@ -36,12 +36,13 @@ import com.fridamcp.app.ui.theme.Primary
 @Composable
 fun SettingsScreen(
     viewModel: SharedViewModel,
+    modifier: Modifier = Modifier,
 ) {
     val device by viewModel.deviceInfo.collectAsState()
     val logs by viewModel.logs.collectAsState()
 
     LazyColumn(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(Background),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),

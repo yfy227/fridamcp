@@ -47,6 +47,7 @@ import com.fridamcp.app.ui.theme.Success
 @Composable
 fun DashboardScreen(
     viewModel: SharedViewModel,
+    modifier: Modifier = Modifier,
 ) {
     val device by viewModel.deviceInfo.collectAsState()
     val mcpServer by viewModel.serverStatus.collectAsState()
@@ -57,7 +58,7 @@ fun DashboardScreen(
     val runningCount = apps.count { it.injectionStatus == InjectionStatus.RUNNING }
 
     LazyColumn(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(Background)
             .padding(horizontal = 16.dp),

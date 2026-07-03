@@ -1,6 +1,7 @@
 package com.fridamcp.app.data.repository
 
 import android.content.Context
+import android.content.Intent
 import com.fridamcp.app.data.model.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -8,60 +9,89 @@ import kotlinx.coroutines.flow.asStateFlow
 
 class McpRepository(private val context: Context) {
 
-    private val _serverStatus = MutableStateFlow(mockMCPServer)
+    private val _serverStatus = MutableStateFlow(
+        MCPServerStatus(
+            running = false,
+            host = "0.0.0.0",
+            port = 8768,
+            transport = "sse",
+            startTime = 0,
+            activeSessions = 0,
+            totalTools = 42,
+            connectedClients = 0,
+        )
+    )
     val serverStatus: StateFlow<MCPServerStatus> = _serverStatus.asStateFlow()
 
     private val _sessions = MutableStateFlow<List<MCPSession>>(emptyList())
     val sessions: StateFlow<List<MCPSession>> = _sessions.asStateFlow()
 
-    private val _modules = MutableStateFlow(mockModules)
+    private val _modules = MutableStateFlow(
+        listOf(
+            MCPModule("process", "进程管理", "进程列表、应用启动、附加进程", 8, "Apps", true),
+            MCPModule("hook", "Hook 管理", "Java/Native Hook、方法追踪", 7, "Code", true),
+            MCPModule("memory", "内存检查", "内存读写、搜索、模块列表", 6, "Memory", true),
+            MCPModule("network", "网络监控", "SSL Hook、HTTP 捕获", 5, "Network", true),
+            MCPModule("filesystem", "文件系统", "文件读写、推送拉取", 6, "File", true),
+            MCPModule("ui_automation", "UI 自动化", "点击、输入、截图", 5, "UI", true),
+            MCPModule("crypto", "加密分析", "Cipher Hook、密钥导出", 3, "Crypto", true),
+            MCPModule("log", "日志捕获", "logcat、Frida 脚本日志", 4, "Log", true),
+        )
+    )
     val modules: StateFlow<List<MCPModule>> = _modules.asStateFlow()
 
-    private val _logs = MutableStateFlow(mockLogs)
+    private val _logs = MutableStateFlow<List<LogEntry>>(emptyList())
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
-    private val _tasks = MutableStateFlow(mockInjectionTasks)
+    private val _tasks = MutableStateFlow<List<InjectionTask>>(emptyList())
     val tasks: StateFlow<List<InjectionTask>> = _tasks.asStateFlow()
 
-    init {
-        updateDynamicSessions()
-    }
-
-    /** Generate dynamic sessions from running apps with MCP online */
-    fun updateDynamicSessions(runningApps: List<AppInfo> = emptyList()) {
-        val sessions = runningApps
-            .filter { it.injectionStatus == InjectionStatus.RUNNING && it.mcpStatus == MCPServiceStatus.ONLINE }
-            .mapIndexed { i, app ->
-                MCPSession(
-                    id = "sess-${app.id}",
-                    pid = app.pid ?: 0,
-                    appName = app.appName,
-                    packageName = app.packageName,
-                    state = "attached",
-                    createdAt = app.injectedAt ?: System.currentTimeMillis(),
-                    scriptCount = 1 + i,
-                    hookCount = (1..8).random(),
-                    messageCount = (0..120).random(),
-                )
-            }
-        _sessions.value = sessions
-    }
-
-    fun toggleServer() {
-        val current = _serverStatus.value
-        _serverStatus.value = current.copy(
-            running = !current.running,
-            startTime = if (!current.running) System.currentTimeMillis() else null,
-            activeSessions = if (!current.running) current.activeSessions else 0,
+    /** Start MCP server via foreground service */
+    fun startServer() {
+        _serverStatus.value = _serverStatus.value.copy(
+            running = true,
+            startTime = System.currentTimeMillis(),
         )
-    }
+        addLog(LogLevel.INFO, "McpServer", "MCP 服务器已启动 — 监听 ${_serverStatus.value.host}:${_serverStatus.value.port}")
 
-    fun toggleModule(moduleName: String) {
-        _modules.value = _modules.value.map { m ->
-            if (m.name == moduleName) m.copy(enabled = !m.enabled) else m
+        // Start the foreground service
+        try {
+            val intent = Intent(context, com.fridamcp.app.data.service.McpServerService::class.java)
+            intent.action = com.fridamcp.app.data.service.McpServerService.ACTION_START
+            context.startForegroundService(intent)
+        } catch (e: Exception) {
+            addLog(LogLevel.ERROR, "McpServer", "启动 MCP 服务失败: ${e.message}")
         }
     }
 
+    /** Stop MCP server */
+    fun stopServer() {
+        _serverStatus.value = _serverStatus.value.copy(
+            running = false,
+            startTime = 0,
+            activeSessions = 0,
+            connectedClients = 0,
+        )
+        _sessions.value = emptyList()
+        addLog(LogLevel.INFO, "McpServer", "MCP 服务器已停止")
+
+        try {
+            val intent = Intent(context, com.fridamcp.app.data.service.McpServerService::class.java)
+            intent.action = com.fridamcp.app.data.service.McpServerService.ACTION_STOP
+            context.startForegroundService(intent)
+        } catch (e: Exception) {
+            // ignore
+        }
+    }
+
+    /** Toggle module enabled state */
+    fun toggleModule(name: String) {
+        _modules.value = _modules.value.map { m ->
+            if (m.name == name) m.copy(enabled = !m.enabled) else m
+        }
+    }
+
+    /** Create injection task */
     fun createInjectionTask(
         apkPath: String,
         appName: String,
@@ -99,6 +129,6 @@ class McpRepository(private val context: Context) {
             source = source,
             message = message,
         )
-        _logs.value = listOf(entry) + _logs.value
+        _logs.value = listOf(entry) + _logs.value.take(99)
     }
 }

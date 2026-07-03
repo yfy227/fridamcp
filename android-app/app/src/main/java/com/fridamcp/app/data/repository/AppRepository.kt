@@ -1,15 +1,17 @@
 package com.fridamcp.app.data.repository
 
 import android.content.Context
+import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import com.fridamcp.app.data.model.*
+import com.fridamcp.app.data.service.InjectionDetector
 import com.fridamcp.app.ui.theme.AppIconColors
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class AppRepository(private val context: Context) {
+class AppRepository(val context: Context) {
 
     private val _apps = MutableStateFlow<List<AppInfo>>(emptyList())
     val apps: StateFlow<List<AppInfo>> = _apps.asStateFlow()
@@ -17,103 +19,103 @@ class AppRepository(private val context: Context) {
     private val _scanning = MutableStateFlow(false)
     val scanning: StateFlow<Boolean> = _scanning.asStateFlow()
 
-    init {
-        // Start with mock data; real implementation will call loadInstalledApps()
-        _apps.value = mockApps
-    }
+    private val detector = InjectionDetector(context)
+    private var colorIndex = 0
 
-    /** Load installed apps from PackageManager */
+    /** Load real installed apps from PackageManager */
     fun loadInstalledApps() {
-        val pm = context.packageManager
-        val packages = pm.getInstalledApplications(PackageManager.GET_META_DATA)
-        val appList = packages.mapIndexed { index, appInfo ->
-            val pkgInfo = try {
-                pm.getPackageInfo(appInfo.packageName, 0)
-            } catch (e: Exception) {
-                null
-            }
-            AppInfo(
-                id = "app-$index",
-                packageName = appInfo.packageName,
-                appName = pm.getApplicationLabel(appInfo).toString(),
-                version = pkgInfo?.versionName ?: "unknown",
-                versionCode = pkgInfo?.longVersionCode ?: 0,
-                iconColor = AppIconColors[index % AppIconColors.size].value.toLong(),
-                iconText = (pm.getApplicationLabel(appInfo).toString().firstOrNull() ?: '?').toString(),
-                isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0,
-                installTime = pkgInfo?.firstInstallTime ?: 0,
-                updateTime = pkgInfo?.lastUpdateTime ?: 0,
-                injectionStatus = InjectionStatus.NOT_INJECTED,
-                detectionMethod = DetectionMethod.NONE,
-            )
-        }.sortedBy { it.appName }
-        _apps.value = appList
-    }
-
-    /** Get app icon */
-    fun getAppIcon(packageName: String): Drawable? {
-        return try {
-            context.packageManager.getApplicationIcon(packageName)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    /** Scan apps for injection status */
-    fun scanApps() {
         _scanning.value = true
-        // TODO: Real detection logic via InjectionDetector
-        // For now, just update scan times
-        _apps.value = _apps.value.map { it.copy(lastScanTime = System.currentTimeMillis()) }
-        _scanning.value = false
-    }
+        try {
+            val pm = context.packageManager
+            val packages = pm.getInstalledApplications(0)
+            val appList = packages.mapIndexed { index, appInfo ->
+                val pkgInfo = try {
+                    pm.getPackageInfo(appInfo.packageName, 0)
+                } catch (e: Exception) {
+                    null
+                }
 
-    /** Launch app */
-    fun launchApp(appId: String) {
-        _apps.value = _apps.value.map { app ->
-            if (app.id == appId) {
-                app.copy(
-                    injectionStatus = InjectionStatus.RUNNING,
-                    pid = (10000..40000).random(),
-                    mcpStatus = MCPServiceStatus.ONLINE,
+                val isSystem = (appInfo.flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM) != 0
+
+                // Detect injection status
+                val detectionResult = try {
+                    detector.detectStatic(appInfo.packageName)
+                } catch (e: Exception) {
+                    InjectionDetector.DetectionResult(false, DetectionMethod.NONE, "检测失败: ${e.message}")
+                }
+
+                val injectionStatus = if (detectionResult.detected) {
+                    InjectionStatus.INJECTED
+                } else {
+                    InjectionStatus.NOT_INJECTED
+                }
+
+                val color = AppIconColors[colorIndex % AppIconColors.size].value.toLong()
+                colorIndex++
+
+                AppInfo(
+                    id = "app-$index",
+                    packageName = appInfo.packageName,
+                    appName = pm.getApplicationLabel(appInfo).toString(),
+                    version = pkgInfo?.versionName ?: "unknown",
+                    versionCode = pkgInfo?.let { if (it.versionCode > 0) it.versionCode else 1 } ?: 1,
+                    iconColor = color,
+                    iconText = pm.getApplicationLabel(appInfo).toString().firstOrNull()?.toString() ?: "?",
+                    isSystem = isSystem,
+                    installTime = pkgInfo?.firstInstallTime ?: System.currentTimeMillis(),
+                    updateTime = pkgInfo?.lastUpdateTime ?: System.currentTimeMillis(),
+                    injectionStatus = injectionStatus,
+                    gadgetVersion = detectionResult.gadgetVersion,
+                    gadgetArch = detectionResult.gadgetArch,
+                    injectedAt = if (detectionResult.detected) pkgInfo?.firstInstallTime else null,
+                    mcpStatus = if (detectionResult.detected) MCPServiceStatus.OFFLINE else null,
                     lastScanTime = System.currentTimeMillis(),
-                    detectionMethod = DetectionMethod.RUNTIME,
+                    detectionMethod = detectionResult.method,
                 )
-            } else app
+            }.sortedWith(compareBy<AppInfo> { it.injectionStatus != InjectionStatus.INJECTED }
+                .thenBy { it.appName.lowercase() })
+
+            _apps.value = appList
+        } catch (e: Exception) {
+            // If anything fails, leave empty list
+        } finally {
+            _scanning.value = false
         }
     }
 
-    /** Toggle MCP service for app */
-    fun toggleMCP(appId: String) {
-        _apps.value = _apps.value.map { app ->
-            if (app.id == appId) {
-                val newStatus = if (app.mcpStatus == MCPServiceStatus.ONLINE) MCPServiceStatus.OFFLINE else MCPServiceStatus.ONLINE
-                app.copy(mcpStatus = newStatus)
-            } else app
-        }
+    /** Scan a single app for injection */
+    fun scanApp(packageName: String) {
+        val apps = _apps.value.toMutableList()
+        val index = apps.indexOfFirst { it.packageName == packageName }
+        if (index < 0) return
+
+        val app = apps[index]
+        val result = detector.fullScan(app)
+        apps[index] = app.copy(
+            injectionStatus = if (result.detected) {
+                if (result.method == DetectionMethod.RUNTIME || result.method == DetectionMethod.PROCESS) {
+                    InjectionStatus.RUNNING
+                } else {
+                    InjectionStatus.INJECTED
+                }
+            } else {
+                InjectionStatus.NOT_INJECTED
+            },
+            detectionMethod = result.method,
+            lastScanTime = System.currentTimeMillis(),
+            gadgetArch = result.gadgetArch,
+            gadgetVersion = result.gadgetVersion,
+        )
+        _apps.value = apps
     }
 
-    /** Rescan single app */
-    fun rescanApp(appId: String) {
+    /** Update app status (e.g., after launch or MCP toggle) */
+    fun updateAppStatus(packageName: String, status: InjectionStatus, mcpStatus: MCPServiceStatus? = null) {
         _apps.value = _apps.value.map { app ->
-            if (app.id == appId) app.copy(lastScanTime = System.currentTimeMillis()) else app
-        }
-    }
-
-    /** Remove injection */
-    fun removeInjection(appId: String) {
-        _apps.value = _apps.value.map { app ->
-            if (app.id == appId) {
+            if (app.packageName == packageName) {
                 app.copy(
-                    injectionStatus = InjectionStatus.NOT_INJECTED,
-                    gadgetVersion = null,
-                    gadgetArch = null,
-                    injectedAt = null,
-                    pid = null,
-                    mcpPort = null,
-                    mcpStatus = null,
-                    detectionMethod = DetectionMethod.NONE,
-                    lastScanTime = System.currentTimeMillis(),
+                    injectionStatus = status,
+                    mcpStatus = mcpStatus ?: app.mcpStatus,
                 )
             } else app
         }

@@ -56,6 +56,7 @@ import com.fridamcp.app.ui.theme.Primary
 @Composable
 fun AppsScreen(
     viewModel: SharedViewModel,
+    modifier: Modifier = Modifier,
 ) {
     val apps by viewModel.apps.collectAsState()
     val scanning by viewModel.scanning.collectAsState()
@@ -77,7 +78,7 @@ fun AppsScreen(
     val injectedCount = apps.count { it.injectionStatus == InjectionStatus.INJECTED || it.injectionStatus == InjectionStatus.RUNNING }
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(Background),
     ) {

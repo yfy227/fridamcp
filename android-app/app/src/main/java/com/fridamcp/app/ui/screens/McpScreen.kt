@@ -56,13 +56,14 @@ import com.fridamcp.app.ui.theme.Success
 @Composable
 fun McpScreen(
     viewModel: SharedViewModel,
+    modifier: Modifier = Modifier,
 ) {
     val serverStatus by viewModel.serverStatus.collectAsState()
     val sessions by viewModel.sessions.collectAsState()
     val modules by viewModel.modules.collectAsState()
 
     LazyColumn(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
             .background(Background),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
