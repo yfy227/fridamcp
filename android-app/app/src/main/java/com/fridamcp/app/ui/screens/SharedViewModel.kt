@@ -128,21 +128,21 @@ class SharedViewModel(
         val ctx = appRepository.context
         mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在请求 Shizuku 授权...")
 
-        ShizukuManager.requestShizukuPermission(ctx, object : ShizukuManager.PermissionResultCallback {
-            override fun onResult(granted: Boolean) {
-                ShizukuManager.refresh()
-                val mode = ShizukuManager.currentMode
-                if (granted) {
-                    _permissionRequestResult.value = "✅ Shizuku 授权成功 — 模式: $mode"
-                    mcpRepository.addLog(LogLevel.INFO, "Shizuku", "授权成功 — 模式: $mode")
-                } else {
-                    _permissionRequestResult.value = "❌ Shizuku 授权被拒绝 — 请在 Shizuku 应用中允许"
-                    mcpRepository.addLog(LogLevel.WARNING, "Shizuku", "授权被拒绝 — 请在 Shizuku 中手动允许")
-                }
-                // 刷新设备信息
-                deviceRepository.refresh()
+        // 设置回调
+        ShizukuManager.onShizukuPermissionResult = { granted: Boolean ->
+            ShizukuManager.refresh()
+            val mode = ShizukuManager.currentMode
+            if (granted) {
+                _permissionRequestResult.value = "✅ Shizuku 授权成功 — 模式: $mode"
+                mcpRepository.addLog(LogLevel.INFO, "Shizuku", "授权成功 — 模式: $mode")
+            } else {
+                _permissionRequestResult.value = "❌ Shizuku 授权被拒绝 — 请在 Shizuku 应用中允许"
+                mcpRepository.addLog(LogLevel.WARNING, "Shizuku", "授权被拒绝 — 请在 Shizuku 中手动允许")
             }
-        })
+            deviceRepository.refresh()
+        }
+
+        ShizukuManager.requestShizukuPermission(ctx)
 
         // 也刷新一次状态
         ShizukuManager.refresh()

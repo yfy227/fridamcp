@@ -31,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.fridamcp.app.ui.theme.Background
 import com.fridamcp.app.ui.theme.CardElevated
+import com.fridamcp.app.ui.theme.Error
 import com.fridamcp.app.ui.theme.Foreground
 import com.fridamcp.app.ui.theme.MutedForeground
 import com.fridamcp.app.ui.theme.Primary
@@ -112,7 +113,7 @@ fun SettingsScreen(
                         ) { Text("刷新", style = MaterialTheme.typography.labelLarge, color = Primary) }
                     }
                     // 权限请求结果
-                    viewModel.permissionRequestResult.value?.let { result ->
+                    viewModel.permissionRequestResult.value?.let { result: String ->
                         Spacer(modifier = Modifier.height(8.dp))
                         Text(
                             result,
