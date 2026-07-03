@@ -266,18 +266,15 @@ class SharedViewModel(
             try {
                 val injector = com.fridamcp.app.data.service.ApkInjector(appRepository.context)
 
-                // Step 1: Detect arch
+                // Step 1: Detect arch (from parameter or auto)
                 mcpRepository.updateTask(task.id, 10, InjectionTaskStatus.INJECTING)
-                mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "检测 APK 架构...")
-                val detectedArch = injector.detectArch(apkPath) ?: arch
-                mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "架构: $detectedArch")
+                mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "目标架构: $arch")
 
                 // Step 2: Inject gadget
                 mcpRepository.updateTask(task.id, 30, InjectionTaskStatus.INJECTING)
                 mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "注入 frida-gadget...")
 
-                val outputApk = "${apkPath.removeSuffix(".apk")}_injected.apk"
-                val result = injector.inject(apkPath, outputApk, detectedArch, useApktool)
+                val result = injector.inject(apkPath, arch)
 
                 when (result) {
                     is com.fridamcp.app.data.service.ApkInjector.Result.Success -> {
