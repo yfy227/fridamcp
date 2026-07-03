@@ -3,15 +3,10 @@ package com.fridamcp.app.data.service
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
-import android.content.ServiceConnection
 import android.content.pm.PackageManager
-import android.os.IBinder
 import android.os.Process
 import android.util.Log
-import rikka.shizuku.api.ShizukuBinderWrapper
-import rikka.shizuku.api.IShizukuService
-import rikka.shizuku.api.ShizukuApiConstants
-import rikka.shizuku.provider.ShizukuBinderWrapperProvider
+import java.io.File
 
 /**
  * Shizuku 权限管理器
@@ -109,16 +104,17 @@ object ShizukuManager {
         }
     }
 
-    /** 通过 Shizuku 执行 (ADB 权限) */
+    /** 通过 Shizuku 执行 (ADB 权限) — 使用 newProcess */
     private fun execShizuku(command: String): String {
         return try {
+            // Shizuku's newProcess gives us a Process with ADB-level permissions
             val process = rikka.shizuku.api.Shizuku.newProcess(arrayOf("sh", "-c", command), null, null)
             val output = process.inputStream.bufferedReader().readText()
             val error = process.errorStream.bufferedReader().readText()
             process.waitFor()
-            output + error
+            output + if (error.isNotBlank()) "\n$error" else ""
         } catch (e: Exception) {
-            // Fallback to direct
+            // Fallback to direct execution
             execDirect(command)
         }
     }

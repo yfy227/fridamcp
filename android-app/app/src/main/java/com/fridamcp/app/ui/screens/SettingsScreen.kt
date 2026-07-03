@@ -101,7 +101,7 @@ fun SettingsScreen(
                         Button(
                             onClick = { viewModel.openShizukuSettings() },
                             shape = RoundedCornerShape(8.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Card),
+                            colors = ButtonDefaults.buttonColors(containerColor = CardElevated),
                         ) { Text("打开 Shizuku", style = MaterialTheme.typography.labelLarge, color = Primary) }
                     }
                     Spacer(modifier = Modifier.height(8.dp))
