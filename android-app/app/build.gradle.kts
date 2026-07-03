@@ -95,10 +95,6 @@ dependencies {
     // Frida runtime (bundled via JNA)
     implementation("net.java.dev.jna:jna:5.14.0@aar")
 
-    // Shizuku (ADB-level permissions without root)
-    implementation("dev.rikka.shizuku:api:13.1.5")
-    implementation("dev.rikka.shizuku:provider:13.1.5")
-
     // Splash Screen
     implementation("androidx.core:core-splashscreen:1.0.1")
 
