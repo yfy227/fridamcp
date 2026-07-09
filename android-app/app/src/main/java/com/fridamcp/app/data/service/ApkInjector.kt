@@ -24,7 +24,7 @@ import java.util.zip.ZipOutputStream
  * 4. 添加 gadget 到 lib/<arch>/ + config JSON
  * 5. 签名 APK (v1 JAR 签名, 使用 BouncyCastle 或 shell jarsigner)
  *
- * 注意: Android 不会自动加载 lib/*.so — 需要 smali patch 添加
+ * 注意: Android 不会自动加载 lib/\*.so — 需要 smali patch 添加
  * System.loadLibrary("frida-gadget")。smali patch 需要 apktool (Android 上不可用)。
  * 推荐使用 frida-server spawn 模式替代 APK 注入。
  */
