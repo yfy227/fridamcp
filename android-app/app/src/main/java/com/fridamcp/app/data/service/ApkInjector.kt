@@ -275,39 +275,39 @@ class ApkInjector(private val context: Context) {
     }
 
     /**
-     * 构建 PKCS#7 SignedData 结构
-     * 使用 Android 内置 BouncyCastle (org.bouncycastle)
+     * 构建 PKCS#7 SignedData — 使用 BouncyCastle CMSSignedDataGenerator
      */
     private fun buildPkcs7(keyPair: java.security.KeyPair, signature: ByteArray, data: ByteArray): ByteArray {
         return try {
-            // 使用 BouncyCastle 的 CMSSignedDataGenerator
-            val gen = org.bouncycastle.cms.CMSSignedDataGenerator()
-
-            // 生成自签名证书
             val cert = generateSelfSignedCert(keyPair)
 
-            gen.addSignerInfoGenerator(
-                org.bouncycastle.cms.SignerInfoGeneratorBuilder(
-                    org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder().build()
-                ).build(
-                    org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withRSA").build(keyPair.private),
-                    cert
-                )
+            val gen = org.bouncycastle.cms.CMSSignedDataGenerator()
+            
+            val signerInfoGen = org.bouncycastle.cms.SignerInfoGeneratorBuilder(
+                org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder()
+                    .setProvider("BC").build()
+            ).build(
+                org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withRSA")
+                    .setProvider("BC").build(keyPair.private),
+                cert
             )
+            gen.addSignerInfoGenerator(signerInfoGen)
 
-            val certs = org.bouncycastle.util.StoreHelper(cert)
-            gen.addCertificates(certs)
+            val certStore = org.bouncycastle.cert.jcajce.JcaCertStore(listOf(cert))
+            gen.addCertificates(certStore)
 
-            val msg = gen.generate(org.bouncycastle.cms.CMSProcessableByteArray(data), true)
+            val msg = gen.generate(
+                org.bouncycastle.cms.CMSProcessableByteArray(data),
+                true
+            )
             msg.encoded
         } catch (e: Exception) {
             Log.e(TAG, "PKCS#7 build failed: ${e.message}")
-            // 降级: 返回 DER 编码的签名 (非标准但部分验证器接受)
             signature
         }
     }
 
-    /** 生成自签名 X.509 证书 */
+    /** 生成自签名 X.509 证书 — 使用 BouncyCastle */
     private fun generateSelfSignedCert(keyPair: java.security.KeyPair): java.security.cert.X509Certificate {
         val notBefore = java.util.Date()
         val notAfter = java.util.Date(notBefore.time + 365L * 24 * 60 * 60 * 1000)
@@ -321,12 +321,12 @@ class ApkInjector(private val context: Context) {
             keyPair.public
         )
 
-        val signer = org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withRSA").build(keyPair.private)
+        val signer = org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withRSA")
+            .setProvider("BC").build(keyPair.private)
         val holder = builder.build(signer)
 
         return org.bouncycastle.cert.jcajce.JcaX509CertificateConverter()
-            .setProvider(org.bouncycastle.jce.provider.BouncyCastleProvider())
-            .getCertificate(holder)
+            .setProvider("BC").getCertificate(holder)
     }
 
     /**

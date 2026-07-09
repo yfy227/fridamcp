@@ -74,6 +74,10 @@ dependencies {
     implementation("androidx.compose.ui:ui-tooling-preview")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended:1.7.2")
+
+    // BouncyCastle — for APK signing (PKCS#7 / X.509)
+    implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
+    implementation("org.bouncycastle:bcpkix-jdk18on:1.78.1")
     implementation("androidx.navigation:navigation-compose:2.8.1")
 
     // ViewModel & Lifecycle
