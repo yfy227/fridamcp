@@ -133,6 +133,15 @@ class SharedViewModel(
         }.start()
     }
 
+    fun scanAllApps() {
+        Thread {
+            mcpRepository.addLog(LogLevel.INFO, "Scanner", "重新扫描所有应用...")
+            appRepository.loadInstalledApps()
+            refreshInjectedCount()
+            mcpRepository.addLog(LogLevel.INFO, "Scanner", "扫描完成 — ${apps.value.size} 个应用, ${_injectedCount.value} 个已注入")
+        }.start()
+    }
+
     // =====================================================================
     // MCP 服务器
     // =====================================================================

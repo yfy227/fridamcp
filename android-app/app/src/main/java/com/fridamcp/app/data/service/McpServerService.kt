@@ -310,7 +310,7 @@ class McpServerService : Service() {
             output.write(sseEvent.toByteArray())
             output.flush()
         } else {
-            sendJson(output, 200, response)
+            sendRaw(output, 200, response)
         }
     }
 
@@ -788,15 +788,19 @@ class McpServerService : Service() {
     }
 
     private fun sendJson(output: OutputStream, status: Int, json: JSONObject) {
-        val body = json.toString().toByteArray()
+        sendRaw(output, status, json.toString())
+    }
+
+    private fun sendRaw(output: OutputStream, status: Int, body: String) {
+        val bodyBytes = body.toByteArray()
         val response = "HTTP/1.1 $status OK\r\n" +
             "Content-Type: application/json\r\n" +
-            "Content-Length: ${body.size}\r\n" +
+            "Content-Length: ${bodyBytes.size}\r\n" +
             "Access-Control-Allow-Origin: *\r\n" +
             "Connection: close\r\n" +
             "\r\n"
         output.write(response.toByteArray())
-        output.write(body)
+        output.write(bodyBytes)
         output.flush()
     }
 
