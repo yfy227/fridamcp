@@ -49,6 +49,14 @@ class SharedViewModel(
     val fridaServerRunning: Boolean get() = ShizukuManager.isFridaServerRunning()
     val fridaVersion: String? get() = ShizukuManager.getFridaVersion()
 
+    private val _fridaInstallProgress = MutableStateFlow<Pair<Int, String>?>(null)
+    val fridaInstallProgress: StateFlow<Pair<Int, String>?> = _fridaInstallProgress.asStateFlow()
+
+    private val fridaInjector = com.fridamcp.app.data.service.FridaInjector(appRepository.context)
+    val fridaServerAvailable: Boolean get() = fridaInjector.isServerAvailable()
+    val fridaInjectAvailable: Boolean get() = fridaInjector.isInjectAvailable()
+    val fridaLatestVersion: String? get() = fridaInjector.getLatestVersion()
+
     private val _permissionRequestResult = MutableStateFlow<String?>(null)
     val permissionRequestResult: StateFlow<String?> = _permissionRequestResult.asStateFlow()
 
@@ -376,7 +384,61 @@ class SharedViewModel(
     }
 
     // =====================================================================
-    // APK 注入
+    // Frida 引擎管理 (本地注入模式)
+    // 参考: https://bbs.kanxue.com/thread-282491.htm
+    // 参考: https://www.52pojie.cn/thread-1823118-1-1.html
+    // =====================================================================
+
+    /**
+     * 下载并安装 frida-server + frida-inject
+     * 流程: 下载 XZ → 纯 Java 解压 → 复制到 /data/local/tmp/ → chmod
+     */
+    fun installFrida() {
+        val arch = android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
+        mcpRepository.addLog(LogLevel.INFO, "FridaInstaller", "开始安装 Frida (arch=$arch)")
+
+        Thread {
+            val ok = fridaInjector.install(arch) { progress, msg ->
+                _fridaInstallProgress.value = progress to msg
+                mcpRepository.addLog(LogLevel.DEBUG, "FridaInstaller", "[$progress%] $msg")
+            }
+            _fridaInstallProgress.value = null
+
+            if (ok) {
+                mcpRepository.addLog(LogLevel.INFO, "FridaInstaller", "Frida 安装完成")
+            } else {
+                mcpRepository.addLog(LogLevel.ERROR, "FridaInstaller", "Frida 安装失败")
+            }
+            deviceRepository.refresh()
+        }.start()
+    }
+
+    fun startFridaServerViaInjector() {
+        Thread {
+            val ok = fridaInjector.startServer()
+            mcpRepository.addLog(
+                if (ok) LogLevel.INFO else LogLevel.ERROR,
+                "FridaServer",
+                if (ok) "frida-server 已启动" else "frida-server 启动失败"
+            )
+            deviceRepository.refresh()
+        }.start()
+    }
+
+    fun stopFridaServerViaInjector() {
+        Thread {
+            val ok = fridaInjector.stopServer()
+            mcpRepository.addLog(
+                LogLevel.INFO,
+                "FridaServer",
+                "frida-server 已停止"
+            )
+            deviceRepository.refresh()
+        }.start()
+    }
+
+    // =====================================================================
+    // APK 注入 (可选 — 需要 PC 端 apktool 完成 smali patch)
     // =====================================================================
 
     fun startInjection(

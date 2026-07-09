@@ -16,6 +16,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Icon
@@ -201,6 +202,37 @@ fun SettingsScreen(
                     SettingRow("协议", "SSE / Streamable HTTP")
                     SettingRow("最大会话数", "10")
                     SettingRow("自动重连", "启用 (5 次重试)")
+                }
+            }
+        }
+
+        // Frida Engine Management
+        item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = CardElevated),
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Text("Frida 引擎管理", style = MaterialTheme.typography.titleMedium, color = Foreground, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    SettingRow("frida-server", if (viewModel.fridaServerAvailable) "已安装" else "未安装")
+                    SettingRow("frida-inject", if (viewModel.fridaInjectAvailable) "已安装" else "未安装")
+                    SettingRow("运行状态", if (viewModel.fridaServerRunning) "运行中" else "未运行")
+                    SettingRow("已安装版本", viewModel.fridaVersion ?: "N/A")
+                    SettingRow("最新版本", viewModel.fridaLatestVersion ?: "N/A")
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(onClick = { viewModel.installFrida() }, modifier = Modifier.fillMaxWidth(), enabled = viewModel.fridaInstallProgress.value == null) { Text(if (viewModel.fridaServerAvailable) "重新安装" else "下载安装 Frida") }
+                    viewModel.fridaInstallProgress.value?.let { (p, m) ->
+                        Spacer(modifier = Modifier.height(8.dp))
+                        LinearProgressIndicator(progress = { p / 100f }, modifier = Modifier.fillMaxWidth())
+                        Text(m, style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = { viewModel.startFridaServerViaInjector() }, modifier = Modifier.weight(1f), enabled = viewModel.fridaServerAvailable && !viewModel.fridaServerRunning) { Text("启动") }
+                        Button(onClick = { viewModel.stopFridaServerViaInjector() }, modifier = Modifier.weight(1f), enabled = viewModel.fridaServerRunning, colors = ButtonDefaults.buttonColors(containerColor = MutedForeground)) { Text("停止") }
+                    }
                 }
             }
         }

@@ -519,7 +519,10 @@ class McpServerService : Service() {
         tool("shell", "exec_shell", "执行 shell 命令 (需要 Shizuku/Root)", JSONObject().put("command", JSONObject().put("type", "string")), JSONArray().put("command"))
 
         // === Frida Script ===
-        tool("frida", "run_frida_script", "在目标进程中执行 Frida JavaScript (通过 frida-server)", JSONObject().put("package_name", JSONObject().put("type", "string")).put("script", JSONObject().put("type", "string")), JSONArray().put("package_name").put("script"))
+        tool("frida", "run_frida_script", "在目标进程中执行 Frida JavaScript (通过 frida-inject 直接注入)", JSONObject().put("package_name", JSONObject().put("type", "string")).put("script", JSONObject().put("type", "string")), JSONArray().put("package_name").put("script"))
+        tool("frida", "spawn_and_inject", "Spawn 模式 — 启动应用并注入 Frida 脚本", JSONObject().put("package_name", JSONObject().put("type", "string")).put("script", JSONObject().put("type", "string")), JSONArray().put("package_name").put("script"))
+        tool("frida", "install_frida", "下载并安装 frida-server + frida-inject", JSONObject().put("arch", JSONObject().put("type", "string").put("description", "CPU架构: arm64-v8a, armeabi-v7a, x86_64")), JSONArray().put("arch"))
+        tool("frida", "frida_status", "获取 frida 安装和运行状态")
 
         return tools
     }
@@ -728,6 +731,28 @@ class McpServerService : Service() {
                     return textResult("PID: $pid, Address: 0x${address.removePrefix("0x")}, Size: $size bytes\n$result")
                 }
 
+                "install_frida" -> {
+                    val arch = args.optString("arch", android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a")
+                    val injector = FridaInjector(this)
+                    val sb = StringBuilder()
+                    val ok = injector.install(arch) { progress, msg ->
+                        sb.append("[$progress%] $msg\n")
+                    }
+                    return textResult(sb.toString() + if (ok) "\n安装成功!" else "\n安装失败!")
+                }
+
+                "frida_status" -> {
+                    val injector = FridaInjector(this)
+                    val status = JSONObject()
+                        .put("server_binary", injector.isServerAvailable())
+                        .put("inject_binary", injector.isInjectAvailable())
+                        .put("server_running", injector.isServerRunning())
+                        .put("installed_version", injector.getInstalledVersion() ?: "N/A")
+                        .put("latest_version", injector.getLatestVersion() ?: "N/A")
+                        .put("permission", ShizukuManager.currentMode.toString())
+                    return textResult(status.toString(2))
+                }
+
                 "inject_apk" -> {
                     val apkPath = args.optString("apk_path")
                     val arch = args.optString("arch", "arm64-v8a")
@@ -770,73 +795,36 @@ class McpServerService : Service() {
                     return textResult(ShizukuManager.execShell(cmd))
                 }
 
-                "run_frida_script" -> {
+                                "run_frida_script" -> {
+                    // 使用 FridaInjector 直接注入 — 本地模式
+                    // 参考: https://bbs.kanxue.com/thread-282491.htm
+                    // 参考: https://www.52pojie.cn/thread-1823118-1-1.html
                     val pkg = args.optString("package_name")
                     val script = args.optString("script")
-
-                    // 检查 frida-server 是否在运行
-                    if (!ShizukuManager.isFridaServerRunning()) {
-                        return textResult(
-                            "Error: frida-server is not running.\n" +
-                            "Start it first: Settings → Frida Server → 启动\n" +
-                            "Or run: /data/local/tmp/frida-server &"
+                    val injector = FridaInjector(this)
+                    val result = injector.injectScript(pkg, script)
+                    return when (result) {
+                        is FridaInjector.InjectionResult.Success -> textResult(
+                            "Package: $pkg (PID: ${result.pid})\n" +
+                            "Script: ${script.length} chars\n" +
+                            "Output:\n${result.output}"
                         )
+                        is FridaInjector.InjectionResult.Error -> textResult("Error: ${result.message}")
                     }
+                }
 
-                    // 检查目标进程是否在运行
-                    val pidCheck = ShizukuManager.execShell("pidof $pkg")
-                    val pid = pidCheck.trim().toIntOrNull()
-                    if (pid == null || pid <= 0) {
-                        return textResult(
-                            "Error: Process '$pkg' is not running.\n" +
-                            "Launch the app first, or check package name."
+                "spawn_and_inject" -> {
+                    // Spawn 模式 — 启动应用并注入
+                    val pkg = args.optString("package_name")
+                    val script = args.optString("script")
+                    val injector = FridaInjector(this)
+                    val result = injector.spawnAndInject(pkg, script)
+                    return when (result) {
+                        is FridaInjector.InjectionResult.Success -> textResult(
+                            "Spawned: $pkg\nOutput:\n${result.output}"
                         )
+                        is FridaInjector.InjectionResult.Error -> textResult("Error: ${result.message}")
                     }
-
-                    // 写入脚本到临时文件
-                    val tmpScript = "/data/local/tmp/frida_script_${System.currentTimeMillis()}.js"
-                    val writeResult = ShizukuManager.execShell("cat > '$tmpScript' << 'FRIDASCRIPT_EOF'\n$script\nFRIDASCRIPT_EOF")
-                    if (writeResult.contains("Error")) {
-                        return textResult("Error: Cannot write script file: $writeResult")
-                    }
-
-                    // frida CLI 是 PC 端 Python 工具, Android 上不可用
-                    // frida-inject 是独立二进制, 需要从 frida releases 单独下载
-                    // 参考: https://frida.re/docs/android/  https://www.52pojie.cn/thread-1823118-1-1.html
-                    // 方案1: /data/local/tmp/frida-inject (如果用户下载了)
-                    // 方案2: python3 + frida 库 (需要 Termux)
-                    // 方案3: 返回错误, 提示用户
-                    val injectResult = ShizukuManager.execShell("""
-                        if [ -x /data/local/tmp/frida-inject ]; then
-                            /data/local/tmp/frida-inject -p $pid -s '$tmpScript' 2>&1
-                            echo "INJECT_OK"
-                        elif command -v python3 >/dev/null 2>&1; then
-                            python3 -c "
-import frida, sys, time
-try:
-    session = frida.attach($pid)
-    script = session.create_script(open('$tmpScript').read())
-    script.load()
-    time.sleep(2)
-    session.detach()
-    print('PYTHON_OK')
-except Exception as e:
-    print('PYTHON_ERROR: ' + str(e))
-" 2>&1
-                        else
-                            echo "ERROR: 需要 frida-inject 或 python3+frida"
-                            echo "下载 frida-inject: https://github.com/frida/frida/releases"
-                            echo "或安装 Termux + python3 + pip install frida"
-                            echo "或使用 frida-gadget listen 模式 (注入 APK)"
-                        fi
-                        rm -f '$tmpScript'
-                    """.trimIndent())
-
-                    return textResult(
-                        "Package: $pkg (PID: $pid)\n" +
-                        "Script size: ${script.length} chars\n" +
-                        "Result:\n$injectResult"
-                    )
                 }
 
                 else -> return errorResult(-32601, "Method not found: $name")
