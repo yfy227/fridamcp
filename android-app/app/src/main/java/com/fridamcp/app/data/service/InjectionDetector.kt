@@ -101,7 +101,7 @@ class InjectionDetector(private val context: Context) {
 
                 // maps 不可读时, 通过 Shizuku 读
                 val mapsResult = com.fridamcp.app.data.service.ShizukuManager.execShell(
-                    "cat /proc/$pid/maps 2>/dev/null | grep -i 'frida\|gadget'"
+                    "cat /proc/$pid/maps 2>/dev/null | grep -i -e frida -e gadget"
                 )
                 if (mapsResult.isNotBlank() && !mapsResult.contains("Error")) {
                     return DetectionResult(
