@@ -7,11 +7,6 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
-import java.security.KeyPair
-import java.security.KeyPairGenerator
-import java.security.KeyStore
-import java.security.PrivateKey
-import java.security.cert.X509Certificate
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
 import java.util.zip.ZipOutputStream
@@ -178,21 +173,19 @@ class ApkInjector(private val context: Context) {
                     Log.i(TAG, "Added: $configPath")
                 }
 
-                // 对其他架构也添加 placeholder (防止 Android 选择错误架构)
+                // 如果 APK 有其他架构的 lib 目录，也添加 gadget
                 for (otherArch in SUPPORTED_ARCHS) {
                     if (otherArch == arch) continue
                     val otherGadget = "lib/$otherArch/libfrida-gadget.so"
                     val otherConfig = "lib/$otherArch/libfrida-gadget.config.so"
-                    if (otherGadget !in existingEntries) {
-                        // 如果 APK 有该架构的 lib 目录，需要添加 gadget
-                        if ("lib/$otherArch/" in existingEntries.any { it.startsWith("lib/$otherArch/") }.toString()) {
-                            zos.putNextEntry(ZipEntry(otherGadget))
-                            zos.write(gadgetData) // 同一个 gadget，多架构用同一个
-                            zos.closeEntry()
-                            zos.putNextEntry(ZipEntry(otherConfig))
-                            zos.write(configData)
-                            zos.closeEntry()
-                        }
+                    if (otherGadget !in existingEntries && existingEntries.any { it.startsWith("lib/$otherArch/") }) {
+                        zos.putNextEntry(ZipEntry(otherGadget))
+                        zos.write(gadgetData)
+                        zos.closeEntry()
+                        zos.putNextEntry(ZipEntry(otherConfig))
+                        zos.write(configData)
+                        zos.closeEntry()
+                        Log.i(TAG, "Added gadget for $otherArch")
                     }
                 }
             }
@@ -207,11 +200,7 @@ class ApkInjector(private val context: Context) {
      */
     private fun signApk(apkFile: File): Boolean {
         return try {
-            // 生成临时 debug key (RSA 2048, 有效期 1 年)
-            val keyPair = generateDebugKey()
-
-            // 使用 v1 JAR 签名
-            signApkV1(apkFile, keyPair)
+            signApkV1(apkFile)
 
             Log.i(TAG, "APK signed successfully (v1 JAR signature)")
             true
@@ -232,62 +221,35 @@ class ApkInjector(private val context: Context) {
         }
     }
 
-    /** 生成临时 RSA 密钥对 (debug key) */
-    private fun generateDebugKey(): KeyPair {
-        val keyGen = KeyPairGenerator.getInstance("RSA")
-        keyGen.initialize(2048)
-        return keyGen.generateKeyPair()
-    }
-
-    /**
+/**
      * v1 JAR 签名 — 手动实现
      * 1. 计算每个文件的 SHA-1
      * 2. 生成 MANIFEST.MF
      * 3. 生成 CERT.SF (签名 MANIFEST)
      * 4. 生成 CERT.RSA (PKCS#7 签名)
      */
-    private fun signApkV1(apkFile: File, keyPair: KeyPair) {
-        // 由于手动实现 v1 签名非常复杂 (需要 PKCS#7 DER 编码)
-        // 使用 Android 内置的 java.security.cert.Certificate
-        // 和 org.bouncycastle (Android 内置) 来生成 PKCS#7
+    private fun signApkV1(apkFile: File) {
+        // 通过 Shizuku/Root 使用 debug keystore 签名
+        // keytool/jarsigner/apksigner 在标准 Android 上不可用
+        // 但有些自定义 ROM 或 Magisk 模块可能安装了它们
+        val apkPath = apkFile.absolutePath
 
-        // 实际方案: 通过 Shizuku/Root 使用 debug keystore
-        // 如果没有 Root，使用 Android PackageInstaller API (不需要签名 — 系统自动签名)
-        val signScript = """
-            KEYSTORE="/data/local/tmp/debug.keystore"
-            STOREPASS="android"
-            KEYPASS="android"
-            ALIAS="fridamcp"
-
-            # 如果 keystore 不存在，创建一个
-            if [ ! -f "\$KEYSTORE" ]; then
-                keytool -genkey -v -keystore "\$KEYSTORE" -alias "\$ALIAS" \
-                    -keyalg RSA -keysize 2048 -validity 10000 \
-                    -storepass "\$STOREPASS" -keypass "\$KEYPASS" \
-                    -dname "CN=FridaMCP, OU=Dev, O=FridaMCP, L=Unknown, ST=Unknown, C=US" 2>/dev/null
-
-                if [ ! -f "\$KEYSTORE" ]; then
-                    echo "keytool not available, trying apksigner"
-                    apksigner sign --ks "\$KEYSTORE" --ks-pass pass:"\$STOREPASS" \
-                        --key-pass pass:"\$KEYPASS" --out '${apkFile.absolutePath}.signed' \
-                        '${apkFile.absolutePath}' 2>&1
-                    if [ -f '${apkFile.absolutePath}.signed' ]; then
-                        mv '${apkFile.absolutePath}.signed' '${apkFile.absolutePath}'
-                        echo "SIGNED_OK"
-                    else
-                        echo "SIGN_FAILED"
-                    fi
-                    exit 0
-                fi
-            fi
-
-            # 使用 jarsigner
-            jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 \
-                -keystore "\$KEYSTORE" -storepass "\$STOREPASS" -keypass "\$KEYPASS" \
-                '${apkFile.absolutePath}' "\$ALIAS" 2>&1 | tail -5
-
-            echo "SIGNED_OK"
-        """.trimIndent()
+        val signScript = buildString {
+            append("KEYSTORE=/data/local/tmp/debug.keystore\n")
+            append("STOREPASS=android\n")
+            append("KEYPASS=android\n")
+            append("ALIAS=fridamcp\n")
+            append("if [ ! -f \$KEYSTORE ]; then\n")
+            append("  keytool -genkey -v -keystore \$KEYSTORE -alias \$ALIAS -keyalg RSA -keysize 2048 -validity 10000 -storepass \$STOREPASS -keypass \$KEYPASS -dname 'CN=FridaMCP, OU=Dev, O=FridaMCP, L=Unknown, ST=Unknown, C=US' 2>/dev/null\n")
+            append("  if [ ! -f \$KEYSTORE ]; then\n")
+            append("    apksigner sign --ks /dev/null --ks-pass pass:android --key-pass pass:android --out '${apkPath}.signed' '$apkPath' 2>&1\n")
+            append("    if [ -f '${apkPath}.signed' ]; then mv '${apkPath}.signed' '$apkPath'; echo SIGNED_OK; else echo SIGN_FAILED; fi\n")
+            append("    exit 0\n")
+            append("  fi\n")
+            append("fi\n")
+            append("jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 -keystore \$KEYSTORE -storepass \$STOREPASS -keypass \$KEYPASS '$apkPath' \$ALIAS 2>&1 | tail -5\n")
+            append("echo SIGNED_OK\n")
+        }
 
         val result = ShizukuManager.execShell(signScript)
         Log.d(TAG, "Sign result: $result")
