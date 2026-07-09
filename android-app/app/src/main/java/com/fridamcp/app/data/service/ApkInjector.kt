@@ -223,22 +223,54 @@ class ApkInjector(private val context: Context) {
         }
     }
 
-    /** 生成自签名 X.509 证书 — 手动 DER 编码 */
+    /** 生成自签名 X.509 证书 DER — 手动 DER 编码 */
     private fun generateSelfSignedCertDer(keyPair: java.security.KeyPair): ByteArray {
-        // 使用 Android 内置的 java.security.cert.X509Certificate 生成
-        // Android 没有 X509v3CertificateBuilder, 但有 sun.security 不存在
-        // 用最简方式: 手动构建 DER
         val notBefore = java.util.Date()
         val notAfter = java.util.Date(notBefore.time + 365L * 24 * 60 * 60 * 1000)
         val serial = java.math.BigInteger.valueOf(System.currentTimeMillis())
 
-        // 手动 DER 编码 X.509 证书
-        return buildX509CertDer(
-            serial,
-            notBefore,
-            notAfter,
-            keyPair.public,
-            keyPair.private
+        val cnOid = encodeOid(intArrayOf(2, 5, 4, 3))
+        val cnValue = encodeUtf8String("FridaMCP")
+        val rdn = encodeSequence(encodeSet(encodeSequence(cnOid + cnValue)))
+        val nameDer = encodeSequence(rdn)
+        val validityDer = encodeSequence(encodeUtcTime(notBefore) + encodeUtcTime(notAfter))
+        val sigAlgOid = encodeSequence(encodeOid(intArrayOf(1, 2, 840, 113549, 1, 1, 11)))
+        val spki = keyPair.public.encoded
+
+        val tbs = encodeSequence(
+            encodeExplicit(0, encodeInteger(2)) +
+            encodeInteger(serial.toByteArray()) +
+            sigAlgOid + nameDer + validityDer + nameDer + spki
+        )
+
+        val sig = Signature.getInstance("SHA256withRSA")
+        sig.initSign(keyPair.private)
+        sig.update(tbs)
+        val sigBytes = sig.sign()
+
+        return encodeSequence(tbs + sigAlgOid + encodeBitString(sigBytes))
+    }
+
+    /** 构建 PKCS#7 SignedData DER */
+    private fun buildPkcs7SignedData(certDer: ByteArray, keyPair: java.security.KeyPair, signature: ByteArray): ByteArray {
+        val serial = java.math.BigInteger.valueOf(System.currentTimeMillis())
+        val cnOid = encodeOid(intArrayOf(2, 5, 4, 3))
+        val cnValue = encodeUtf8String("FridaMCP")
+        val rdn = encodeSequence(encodeSet(encodeSequence(cnOid + cnValue)))
+        val issuerDer = encodeSequence(rdn)
+        val issuerSerial = encodeSequence(issuerDer + encodeInteger(serial.toByteArray()))
+        val sha256Oid = encodeSequence(encodeOid(intArrayOf(2, 16, 840, 1, 101, 3, 4, 2, 1)))
+        val rsaOid = encodeSequence(encodeOid(intArrayOf(1, 2, 840, 113549, 1, 1, 1)))
+        val signerInfo = encodeSequence(
+            encodeInteger(1) + issuerSerial + sha256Oid + rsaOid + encodeOctetString(signature)
+        )
+        val dataOid = encodeSequence(encodeOid(intArrayOf(1, 2, 840, 113549, 1, 7, 1)))
+        val signedData = encodeSequence(
+            encodeInteger(1) + encodeSet(ByteArray(0)) + dataOid +
+            encodeExplicit(0, certDer) + encodeSet(signerInfo)
+        )
+        return encodeSequence(
+            encodeOid(intArrayOf(1, 2, 840, 113549, 1, 7, 2)) + encodeExplicit(0, signedData)
         )
     }
 
