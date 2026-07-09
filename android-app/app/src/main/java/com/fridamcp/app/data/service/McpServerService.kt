@@ -443,10 +443,27 @@ class McpServerService : Service() {
     // Tool Definitions
     // =====================================================================
 
+    /** 禁用的模块 — 由 McpRepository.toggleModule 通过广播控制 */
+    private val disabledModules = mutableSetOf<String>()
+
+    private fun updateDisabledModules() {
+        // 从 SharedPreferences 读取禁用模块列表
+        val prefs = getSharedPreferences("fridamcp_modules", MODE_PRIVATE)
+        disabledModules.clear()
+        for (module in prefs.all) {
+            if (module.value == false) {
+                disabledModules.add(module.key)
+            }
+        }
+        Log.i(TAG, "Disabled modules: $disabledModules")
+    }
+
     private fun getToolsList(): JSONArray {
+        updateDisabledModules()
         val tools = JSONArray()
 
-        fun tool(name: String, description: String, inputSchema: JSONObject = JSONObject(), required: JSONArray = JSONArray()) {
+        fun tool(module: String, name: String, description: String, inputSchema: JSONObject = JSONObject(), required: JSONArray = JSONArray()) {
+            if (module in disabledModules) return
             tools.put(JSONObject()
                 .put("name", name)
                 .put("description", description)
@@ -457,50 +474,50 @@ class McpServerService : Service() {
         }
 
         // === System ===
-        tool("ping", "健康检查")
-        tool("server_info", "获取 MCP 服务器信息")
-        tool("get_device_info", "获取设备信息：型号、Android 版本、架构、Root 状态")
+        tool("system", "ping", "健康检查")
+        tool("system", "server_info", "获取 MCP 服务器信息")
+        tool("system", "get_device_info", "获取设备信息：型号、Android 版本、架构、Root 状态")
 
         // === Process ===
-        tool("list_apps", "列出已安装应用", JSONObject().put("system", JSONObject().put("type", "boolean").put("description", "包含系统应用")))
-        tool("list_processes", "列出运行中的进程")
-        tool("launch_app", "启动应用", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
-        tool("kill_process", "杀死进程", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
-        tool("check_injection", "检测应用是否已注入 frida-gadget", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
-        tool("get_system_status", "获取系统状态")
+        tool("process", "list_apps", "列出已安装应用", JSONObject().put("system", JSONObject().put("type", "boolean").put("description", "包含系统应用")))
+        tool("process", "list_processes", "列出运行中的进程")
+        tool("process", "launch_app", "启动应用", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
+        tool("process", "kill_process", "杀死进程", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
+        tool("process", "check_injection", "检测应用是否已注入 frida-gadget", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
+        tool("process", "get_system_status", "获取系统状态")
 
         // === File System ===
-        tool("list_files", "列出目录内容", JSONObject().put("path", JSONObject().put("type", "string")), JSONArray().put("path"))
-        tool("read_file", "读取文件内容", JSONObject().put("path", JSONObject().put("type", "string")).put("max_size", JSONObject().put("type", "integer").put("default", 4096)), JSONArray().put("path"))
-        tool("get_app_info", "获取应用详细信息", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
+        tool("filesystem", "list_files", "列出目录内容", JSONObject().put("path", JSONObject().put("type", "string")), JSONArray().put("path"))
+        tool("filesystem", "read_file", "读取文件内容", JSONObject().put("path", JSONObject().put("type", "string")).put("max_size", JSONObject().put("type", "integer").put("default", 4096)), JSONArray().put("path"))
+        tool("filesystem", "get_app_info", "获取应用详细信息", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
 
         // === UI Automation ===
-        tool("ui_tap", "点击屏幕", JSONObject().put("x", JSONObject().put("type", "integer")).put("y", JSONObject().put("type", "integer")), JSONArray().put("x").put("y"))
-        tool("ui_swipe", "滑动", JSONObject().put("x1", JSONObject().put("type", "integer")).put("y1", JSONObject().put("type", "integer")).put("x2", JSONObject().put("type", "integer")).put("y2", JSONObject().put("type", "integer")), JSONArray().put("x1").put("y1").put("x2").put("y2"))
-        tool("ui_input_text", "输入文本", JSONObject().put("text", JSONObject().put("type", "string")), JSONArray().put("text"))
-        tool("ui_press_key", "按键", JSONObject().put("keycode", JSONObject().put("type", "string").put("description", "如 KEYCODE_HOME, KEYCODE_BACK")), JSONArray().put("keycode"))
-        tool("screenshot", "截图", JSONObject().put("filename", JSONObject().put("type", "string")))
+        tool("ui_automation", "ui_tap", "点击屏幕", JSONObject().put("x", JSONObject().put("type", "integer")).put("y", JSONObject().put("type", "integer")), JSONArray().put("x").put("y"))
+        tool("ui_automation", "ui_swipe", "滑动", JSONObject().put("x1", JSONObject().put("type", "integer")).put("y1", JSONObject().put("type", "integer")).put("x2", JSONObject().put("type", "integer")).put("y2", JSONObject().put("type", "integer")), JSONArray().put("x1").put("y1").put("x2").put("y2"))
+        tool("ui_automation", "ui_input_text", "输入文本", JSONObject().put("text", JSONObject().put("type", "string")), JSONArray().put("text"))
+        tool("ui_automation", "ui_press_key", "按键", JSONObject().put("keycode", JSONObject().put("type", "string").put("description", "如 KEYCODE_HOME, KEYCODE_BACK")), JSONArray().put("keycode"))
+        tool("ui_automation", "screenshot", "截图", JSONObject().put("filename", JSONObject().put("type", "string")))
 
         // === Log ===
-        tool("get_logcat", "获取 logcat 日志", JSONObject().put("lines", JSONObject().put("type", "integer").put("default", 100)).put("filter", JSONObject().put("type", "string")))
-        tool("clear_logcat", "清除 logcat")
+        tool("log", "get_logcat", "获取 logcat 日志", JSONObject().put("lines", JSONObject().put("type", "integer").put("default", 100)).put("filter", JSONObject().put("type", "string")))
+        tool("log", "clear_logcat", "清除 logcat")
 
         // === Memory ===
-        tool("list_modules", "列出进程加载的模块", JSONObject().put("pid", JSONObject().put("type", "integer")), JSONArray().put("pid"))
-        tool("read_memory", "读取进程内存 (需要 Root + ptrace)", JSONObject().put("pid", JSONObject().put("type", "integer")).put("address", JSONObject().put("type", "string")).put("size", JSONObject().put("type", "integer")), JSONArray().put("pid").put("address").put("size"))
+        tool("memory", "list_modules", "列出进程加载的模块", JSONObject().put("pid", JSONObject().put("type", "integer")), JSONArray().put("pid"))
+        tool("memory", "read_memory", "读取进程内存 (需要 Root + ptrace)", JSONObject().put("pid", JSONObject().put("type", "integer")).put("address", JSONObject().put("type", "string")).put("size", JSONObject().put("type", "integer")), JSONArray().put("pid").put("address").put("size"))
 
         // === Injection ===
-        tool("inject_apk", "注入 frida-gadget 到 APK", JSONObject().put("apk_path", JSONObject().put("type", "string")).put("arch", JSONObject().put("type", "string")), JSONArray().put("apk_path"))
+        tool("injection", "inject_apk", "注入 frida-gadget 到 APK", JSONObject().put("apk_path", JSONObject().put("type", "string")).put("arch", JSONObject().put("type", "string")), JSONArray().put("apk_path"))
 
         // === Sessions ===
-        tool("list_sessions", "列出 MCP 客户端会话")
-        tool("close_session", "关闭客户端会话", JSONObject().put("session_id", JSONObject().put("type", "string")), JSONArray().put("session_id"))
+        tool("session", "list_sessions", "列出 MCP 客户端会话")
+        tool("session", "close_session", "关闭客户端会话", JSONObject().put("session_id", JSONObject().put("type", "string")), JSONArray().put("session_id"))
 
         // === Shell ===
-        tool("exec_shell", "执行 shell 命令 (需要 Shizuku/Root)", JSONObject().put("command", JSONObject().put("type", "string")), JSONArray().put("command"))
+        tool("shell", "exec_shell", "执行 shell 命令 (需要 Shizuku/Root)", JSONObject().put("command", JSONObject().put("type", "string")), JSONArray().put("command"))
 
         // === Frida Script ===
-        tool("run_frida_script", "在目标进程中执行 Frida JavaScript (通过 frida-server)", JSONObject().put("package_name", JSONObject().put("type", "string")).put("script", JSONObject().put("type", "string")), JSONArray().put("package_name").put("script"))
+        tool("frida", "run_frida_script", "在目标进程中执行 Frida JavaScript (通过 frida-server)", JSONObject().put("package_name", JSONObject().put("type", "string")).put("script", JSONObject().put("type", "string")), JSONArray().put("package_name").put("script"))
 
         return tools
     }
@@ -637,25 +654,33 @@ class McpServerService : Service() {
                     if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
                         return textResult("Error: Need Root to read process memory")
                     }
-                    if (!ShizukuManager.rootGranted) {
-                        return textResult("Error: read_memory requires real Root (not Shizuku). ptrace is restricted.")
-                    }
 
-                    // ptrace attach → read mem → detach
+                    // 转换地址为十进制
                     val decimalAddr = if (address.startsWith("0x")) {
                         java.math.BigInteger(address.substring(2), 16).toString()
                     } else {
                         address.toLongOrNull()?.toString() ?: "0"
                     }
 
-                    val cmd = """
-                        # ptrace attach
-                        ptrace attach $pid 2>/dev/null
-                        sleep 0.1
-                        # read memory
+                    // 通过 root 执行: 先用 gdb 附加(如果有), 否则直接读 /proc/PID/mem
+                    // 注意: /proc/PID/mem 需要 ptrace attach 才能读取
+                    // 在 Android root 下, 可以用 busybox 或 toybox 的 devmem
+                    // 或者编译一个小的 native helper: ptrace(PTRACE_ATTACH) → pread /proc/PID/mem → ptrace(PTRACE_DETACH)
+                    // 这里使用 root 下直接读 /proc/PID/mem (某些 root 实现允许)
+                    // 同时尝试用 gdb (如果安装了)
+                    val cmd = """# 方法1: 直接读 /proc/PID/mem (需要 root, 某些内核允许)
+                        # 方法2: 使用 gdb (如果安装了)
+                        which gdb >/dev/null 2>&1 && {
+                            gdb -batch -ex "attach $pid" -ex "x/${size}xb $decimalAddr" -ex "detach" 2>&1
+                            exit 0
+                        }
+                        # 方法3: 直接 dd (某些 root 环境 /proc/PID/mem 可直接读)
                         dd if=/proc/$pid/mem bs=1 skip=$decimalAddr count=$size 2>/dev/null | xxd
-                        # ptrace detach
-                        ptrace detach $pid 2>/dev/null
+                        if [ \$? -ne 0 ]; then
+                            echo "ERROR: Cannot read /proc/$pid/mem"
+                            echo "需要: 1) Root 权限 2) 目标进程未被 ptrace 保护"
+                            echo "或者安装 gdb: pkg install gdb"
+                        fi
                     """.trimIndent()
 
                     val result = ShizukuManager.execShell(cmd)

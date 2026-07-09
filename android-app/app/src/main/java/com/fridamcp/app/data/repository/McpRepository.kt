@@ -117,16 +117,20 @@ class McpRepository(private val context: Context) {
         )
     }
 
-    /** 切换模块 — 真实影响 McpServerService 的工具列表 */
+    /** 切换模块 — 写入 SharedPreferences + 广播通知服务刷新 */
     fun toggleModule(name: String) {
         _modules.value = _modules.value.map { m ->
             if (m.name == name) m.copy(enabled = !m.enabled) else m
         }
-        // 通知服务刷新工具列表
+        val enabled = _modules.value.find { it.name == name }?.enabled ?: true
+        // 持久化到 SharedPreferences — McpServerService 读取此配置
+        val prefs = context.getSharedPreferences("fridamcp_modules", Context.MODE_PRIVATE)
+        prefs.edit().putBoolean(name, enabled).apply()
+        // 广播通知服务立即刷新
         val intent = Intent("com.fridamcp.app.MODULE_TOGGLED")
         intent.setPackage(context.packageName)
         context.sendBroadcast(intent)
-        addLog(LogLevel.INFO, "Module", "模块 $name 已 ${if (_modules.value.find { it.name == name }?.enabled == true) "启用" else "禁用"}")
+        addLog(LogLevel.INFO, "Module", "模块 $name 已 ${if (enabled) "启用" else "禁用"}")
     }
 
     /**

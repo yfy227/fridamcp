@@ -90,7 +90,29 @@ class InjectionDetector(private val context: Context) {
     /** Layer 3: Process detection — scan all processes */
     fun detectProcess(packageName: String): DetectionResult {
         try {
-            // Read /proc directory
+            // Android 10+ 限制 /proc 访问, 先尝试 Shizuku/Root
+            val pidResult = com.fridamcp.app.data.service.ShizukuManager.execShell("pidof $packageName 2>/dev/null")
+            val pid = pidResult.trim().split("\n")[0].trim().toIntOrNull()
+
+            if (pid != null && pid > 0) {
+                // 找到进程 — 检查 /proc/PID/maps
+                val result = detectRuntime(pid)
+                if (result.detected) return result
+
+                // maps 不可读时, 通过 Shizuku 读
+                val mapsResult = com.fridamcp.app.data.service.ShizukuManager.execShell(
+                    "cat /proc/$pid/maps 2>/dev/null | grep -i 'frida\|gadget'"
+                )
+                if (mapsResult.isNotBlank() && !mapsResult.contains("Error")) {
+                    return DetectionResult(
+                        detected = true,
+                        method = DetectionMethod.RUNTIME,
+                        details = "在进程 $pid 的内存映射中发现 frida-gadget (via Shizuku/Root)",
+                    )
+                }
+            }
+
+            // 降级: 直接读 /proc (Android 9 或以下)
             val procRoot = File("/proc")
             val processDirs = procRoot.listFiles { f: File -> f.name.matches(Regex("\\d+")) } ?: emptyArray()
 
@@ -98,8 +120,8 @@ class InjectionDetector(private val context: Context) {
                 try {
                     val cmdline = File(procDir, "cmdline").readText().trimEnd('\u0000')
                     if (cmdline == packageName) {
-                        val pid = procDir.name.toInt()
-                        val result = detectRuntime(pid)
+                        val foundPid = procDir.name.toInt()
+                        val result = detectRuntime(foundPid)
                         if (result.detected) return result
                     }
                 } catch (e: Exception) { continue }

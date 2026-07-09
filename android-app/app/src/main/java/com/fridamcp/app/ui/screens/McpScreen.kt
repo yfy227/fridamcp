@@ -246,23 +246,21 @@ private fun SessionCard(session: com.fridamcp.app.data.model.MCPSession) {
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(session.appName, style = MaterialTheme.typography.titleMedium, color = Foreground)
+                Text("会话 " + session.id.take(8), style = MaterialTheme.typography.titleMedium, color = Foreground)
                 Box(
                     modifier = Modifier
                         .size(8.dp)
                         .clip(RoundedCornerShape(4.dp))
-                        .background(Success),
+                        .background(if (session.state == "connected") Success else MutedForeground),
                 )
             }
-            Text(session.packageName, style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+            Text("客户端: " + session.packageName, style = MaterialTheme.typography.bodySmall, color = MutedForeground)
             Spacer(modifier = Modifier.height(4.dp))
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-            ) {
-                Text("PID: ${session.pid}", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
-                Text("消息: ${session.messageCount}", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
-            }
+            Text(
+                "连接时间: " + java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(session.createdAt)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MutedForeground,
+            )
         }
     }
 }
@@ -270,14 +268,16 @@ private fun SessionCard(session: com.fridamcp.app.data.model.MCPSession) {
 @Composable
 private fun ModuleCard(module: MCPModule, onToggle: () -> Unit) {
     val icon = when (module.name) {
+        "system" -> Icons.Default.Info
         "process" -> Icons.Default.Home
-        "hook" -> Icons.Default.Build
-        "memory" -> Icons.Default.Info
-        "network" -> Icons.Default.Email
         "filesystem" -> Icons.Default.List
         "ui_automation" -> Icons.Default.Search
-        "crypto" -> Icons.Default.Lock
         "log" -> Icons.Default.Refresh
+        "memory" -> Icons.Default.Lock
+        "injection" -> Icons.Default.Build
+        "session" -> Icons.Default.Email
+        "shell" -> Icons.Default.Star
+        "frida" -> Icons.Default.Check
         else -> Icons.Default.Star
     }
     Card(

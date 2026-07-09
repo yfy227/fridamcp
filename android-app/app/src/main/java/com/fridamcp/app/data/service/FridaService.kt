@@ -87,11 +87,11 @@ class FridaService : Service() {
 
     private fun stopFrida() {
         ShizukuManager.refresh()
-        if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.ROOT) {
+        if (ShizukuManager.currentMode != ShizukuManager.PermissionMode.NONE) {
             val stopped = ShizukuManager.stopFridaServer()
-            Log.i(TAG, "frida-server stopped: $stopped")
+            Log.i(TAG, "frida-server stopped: $stopped (mode: ${ShizukuManager.currentMode})")
         } else {
-            Log.w(TAG, "Cannot stop frida-server without root")
+            Log.w(TAG, "Cannot stop frida-server without Shizuku/Root")
         }
         stopSelf()
     }

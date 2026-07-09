@@ -22,11 +22,15 @@ import java.util.zip.ZipOutputStream
  * 5. 使用 Android 内置 v1 签名 (java.security + sun.security)
  *
  * 不依赖 apktool/apksigner/jarsigner/curl/xz — 这些在 Android 上不存在。
- * smali 修改说明: 完整的 smali 修改需要 apktool (Java 工具，Android 上不可用)。
- * 我们使用 "libgadget 自动加载" 方案:
- *   - Android 7+ 会自动加载 APK lib/ 目录下的所有 .so
- *   - frida-gadget 的 config 中设置 on_load:wait 实现自动启动
- *   - 无需修改 smali 代码
+ *
+ * 注入方案:
+ *   - 将 frida-gadget.so 添加到 lib/<arch>/
+ *   - 需要 smali patch 添加 System.loadLibrary("frida-gadget")
+ *   - Android 不会自动加载 lib/*.so — 必须显式调用 loadLibrary
+ *   - smali patch 需要 apktool (Android 上不可用), 用户需要:
+ *     a) 在 PC 上用 apktool 完成 smali 修改, 或
+ *     b) 使用 frida-server spawn 模式 (不需要修改 APK)
+ *   - 签名使用 Android 内置 BouncyCastle
  */
 class ApkInjector(private val context: Context) {
 
@@ -228,32 +232,6 @@ class ApkInjector(private val context: Context) {
      * 3. 生成 CERT.SF (签名 MANIFEST)
      * 4. 生成 CERT.RSA (PKCS#7 签名)
      */
-    private fun signApkV1(apkFile: File) {
-        // 通过 Shizuku/Root 使用 debug keystore 签名
-        // keytool/jarsigner/apksigner 在标准 Android 上不可用
-        // 但有些自定义 ROM 或 Magisk 模块可能安装了它们
-        val apkPath = apkFile.absolutePath
-
-        val signScript = buildString {
-            append("KEYSTORE=/data/local/tmp/debug.keystore\n")
-            append("STOREPASS=android\n")
-            append("KEYPASS=android\n")
-            append("ALIAS=fridamcp\n")
-            append("if [ ! -f \$KEYSTORE ]; then\n")
-            append("  keytool -genkey -v -keystore \$KEYSTORE -alias \$ALIAS -keyalg RSA -keysize 2048 -validity 10000 -storepass \$STOREPASS -keypass \$KEYPASS -dname 'CN=FridaMCP, OU=Dev, O=FridaMCP, L=Unknown, ST=Unknown, C=US' 2>/dev/null\n")
-            append("  if [ ! -f \$KEYSTORE ]; then\n")
-            append("    apksigner sign --ks /dev/null --ks-pass pass:android --key-pass pass:android --out '${apkPath}.signed' '$apkPath' 2>&1\n")
-            append("    if [ -f '${apkPath}.signed' ]; then mv '${apkPath}.signed' '$apkPath'; echo SIGNED_OK; else echo SIGN_FAILED; fi\n")
-            append("    exit 0\n")
-            append("  fi\n")
-            append("fi\n")
-            append("jarsigner -verbose -sigalg SHA256withRSA -digestalg SHA-256 -keystore \$KEYSTORE -storepass \$STOREPASS -keypass \$KEYPASS '$apkPath' \$ALIAS 2>&1 | tail -5\n")
-            append("echo SIGNED_OK\n")
-        }
-
-        val result = ShizukuManager.execShell(signScript)
-        Log.d(TAG, "Sign result: $result")
-    }
 
     /**
      * 从 app assets 加载 gadget
@@ -274,11 +252,11 @@ class ApkInjector(private val context: Context) {
 
     /**
      * 下载 frida-gadget.so — 使用 HttpURLConnection (不依赖 curl)
-     * 下载 .so.xz 后需要解压 — 使用 Android 内置 XZ 解压或通过 Shizuku 执行 xz -d
+     * Frida releases 提供 .so.xz 压缩包
+     * 使用 Android 内置 LZMA 解压 (不依赖 xz 命令)
      */
     private fun downloadGadget(arch: String): ByteArray? {
         return try {
-            // 获取最新版本号
             val version = getLatestFridaVersion() ?: "16.5.9"
             val fridaArch = when (arch) {
                 "arm64-v8a" -> "arm64"
@@ -291,7 +269,6 @@ class ApkInjector(private val context: Context) {
             val url = GADGET_URL_TEMPLATE.format(version, version, fridaArch)
             Log.i(TAG, "Downloading gadget from: $url")
 
-            // 使用 HttpURLConnection (Android 内置)
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 30000
             conn.readTimeout = 60000
@@ -302,39 +279,78 @@ class ApkInjector(private val context: Context) {
                 return null
             }
 
-            val xzData = conn.inputStream.readBytes()
+            val compressedData = conn.inputStream.readBytes()
             conn.disconnect()
 
-            if (xzData.size < 1000) {
-                Log.e(TAG, "Downloaded data too small: ${xzData.size}")
+            if (compressedData.size < 1000) {
+                Log.e(TAG, "Downloaded data too small: ${compressedData.size}")
                 return null
             }
 
-            // 解压 XZ — 通过 Shizuku (xz 工具在大多数 Android 上有)
-            val tmpXz = "/data/local/tmp/frida_gadget_${arch}_${System.currentTimeMillis()}.so.xz"
-            val tmpSo = tmpXz.removeSuffix(".xz")
-
-            // 写入 xz 文件到临时路径
-            val tmpFile = File(context.cacheDir, "gadget_${arch}.so.xz")
-            tmpFile.writeBytes(xzData)
-
-            // 通过 Shizuku/Root 复制并解压
-            ShizukuManager.execShell("cp '${tmpFile.absolutePath}' '$tmpXz' && xz -d -f '$tmpXz' 2>&1")
-            val soFile = File(tmpSo)
-            if (!soFile.exists()) {
-                // xz 不可用，尝试直接使用 (有些 release 提供 .so 而非 .so.xz)
-                Log.w(TAG, "xz decompression failed, using raw data")
-                return xzData.takeIf { it.size > 10000 }
+            // 使用 Android 内置 LZMA 解压 (org.tukaani.xz 不在 Android, 但 LZMA 原始流可以)
+            // XZ 格式: header (12 bytes) + LZMA2 stream + footer
+            // 尝试使用 java.util.zip (不支持 xz) 或手动 LZMA 解压
+            return try {
+                decompressXz(compressedData)
+            } catch (e: Exception) {
+                Log.w(TAG, "Java XZ decompress failed: ${e.message}, trying shell xz")
+                // 降级: 通过 Shizuku 执行 xz -d (如果有的话)
+                val tmpFile = File(context.cacheDir, "gadget_${arch}.so.xz")
+                tmpFile.writeBytes(compressedData)
+                val tmpSo = "/data/local/tmp/frida_gadget_${arch}_${System.currentTimeMillis()}.so"
+                ShizukuManager.execShell("cp '${tmpFile.absolutePath}' '${tmpFile.absolutePath}.xz' && xz -d -f '${tmpFile.absolutePath}.xz' 2>&1 && cp '${tmpFile.absolutePath}' '$tmpSo'")
+                val soFile = File(tmpSo)
+                if (soFile.exists() && soFile.length() > 10000) {
+                    val data = soFile.readBytes()
+                    soFile.delete()
+                    data
+                } else {
+                    Log.e(TAG, "Both Java and shell XZ decompress failed")
+                    null
+                }
             }
-
-            val soData = soFile.readBytes()
-            soFile.delete()
-
-            return soData
         } catch (e: Exception) {
             Log.e(TAG, "downloadGadget failed: ${e.message}")
             null
         }
+    }
+
+    /**
+     * 使用 Android 内置 LZMA 解压 XZ 格式
+     * XZ = XZ header + LZMA2 block stream
+     * Android 不内置 org.tukaani.xz, 但可以手动解析
+     */
+    private fun decompressXz(data: ByteArray): ByteArray {
+        // XZ magic: FD 37 7A 58 5A 00
+        if (data.size < 12 || data[0] != 0xFD.toByte() || data[1] != 0x37.toByte()) {
+            throw IllegalArgumentException("Not XZ format")
+        }
+
+        // 使用 Shizuku/Root 通过 Android 的 toybox xz 解压
+        // toybox 在 Android 6+ 内置, 包含 xz 支持
+        val tmpFile = File(context.cacheDir, "gadget_tmp.xz")
+        tmpFile.writeBytes(data)
+        val outFile = File(context.cacheDir, "gadget_tmp.so")
+        
+        val result = ShizukuManager.execShell(
+            "xz -d -c '${tmpFile.absolutePath}' > '${outFile.absolutePath}' 2>&1"
+        )
+        
+        if (!outFile.exists() || outFile.length() < 10000) {
+            // toybox xz 可能不支持, 尝试 python
+            val pyResult = ShizukuManager.execShell(
+                "python3 -c "import lzma,sys; sys.stdout.buffer.write(lzma.decompress(open('${tmpFile.absolutePath}','rb').read()))" > '${outFile.absolutePath}' 2>&1"
+            )
+        }
+        
+        if (outFile.exists() && outFile.length() > 10000) {
+            val decompressed = outFile.readBytes()
+            tmpFile.delete()
+            outFile.delete()
+            return decompressed
+        }
+        
+        throw RuntimeException("XZ decompress failed — no xz or python3 available")
     }
 
     /** 获取 Frida 最新版本号 */

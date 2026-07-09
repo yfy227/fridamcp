@@ -112,14 +112,21 @@ object ShizukuManager {
         return paths.any { File(it).exists() }
     }
 
-    /** 实际测试 root 是否可用 — 执行 su -c id 并检查 uid=0 */
+    /** 实际测试 root 是否可用 — 执行 su -c id 并检查 uid=0 (5秒超时) */
     fun checkRootGranted(): Boolean {
         if (!isRootAvailable()) return false
         return try {
             val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
+            // 5 秒超时 — 防止 su 权限弹窗挂起
+            val completed = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
+            if (!completed) {
+                process.destroyForcibly()
+                Log.w(TAG, "Root check timed out (su dialog denied?)")
+                return false
+            }
             val output = process.inputStream.bufferedReader().readText()
             val error = process.errorStream.bufferedReader().readText()
-            val code = process.waitFor()
+            val code = process.exitValue()
             Log.d(TAG, "su id output: $output, error: $error, code: $code")
             output.contains("uid=0") || (code == 0 && error.isBlank())
         } catch (e: Exception) {

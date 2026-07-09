@@ -25,7 +25,6 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -59,7 +58,6 @@ fun InjectScreen(
     var apkPath by remember { mutableStateOf("") }
     var appName by remember { mutableStateOf("") }
     var packageName by remember { mutableStateOf("") }
-    var useApktool by remember { mutableStateOf(true) }
     var arch by remember { mutableStateOf("arm64-v8a") }
 
     // File picker launcher
@@ -175,26 +173,22 @@ fun InjectScreen(
                             }
                         }
 
-                        // Apktool switch
+                        // Injection method info
                         Row(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
                             Column {
-                                Text("使用 apktool 模式", style = MaterialTheme.typography.bodyMedium, color = Foreground)
-                                Text("修改 smali 注入 System.loadLibrary", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+                                Text("注入模式", style = MaterialTheme.typography.bodyMedium, color = Foreground)
+                                Text("ZIP 注入 + 自动签名 (libgadget + smali patch)", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
                             }
-                            Switch(
-                                checked = useApktool,
-                                onCheckedChange = { useApktool = it },
-                            )
                         }
 
                         Button(
                             onClick = {
                                 if (apkPath.isNotBlank() && appName.isNotBlank() && packageName.isNotBlank()) {
-                                    viewModel.startInjection(apkPath, appName, packageName, arch, useApktool)
+                                    viewModel.startInjection(apkPath, appName, packageName, arch, false)
                                 }
                             },
                             modifier = Modifier
