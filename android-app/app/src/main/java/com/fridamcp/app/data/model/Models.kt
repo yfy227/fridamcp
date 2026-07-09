@@ -126,7 +126,6 @@ data class InjectionTask(
     val status: InjectionTaskStatus,
     val progress: Int,
     val arch: String,
-    val useApktool: Boolean,
     val outputApk: String? = null,
     val error: String? = null,
     val createdAt: Long,

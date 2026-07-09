@@ -188,7 +188,7 @@ fun InjectScreen(
                         Button(
                             onClick = {
                                 if (apkPath.isNotBlank() && appName.isNotBlank() && packageName.isNotBlank()) {
-                                    viewModel.startInjection(apkPath, appName, packageName, arch, false)
+                                    viewModel.startInjection(apkPath, appName, packageName, arch)
                                 }
                             },
                             modifier = Modifier
@@ -268,7 +268,6 @@ private fun TaskCard(task: com.fridamcp.app.data.model.InjectionTask) {
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text("架构: ${task.arch}", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
-                Text("apktool: ${if (task.useApktool) "是" else "否"}", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
             }
             // Progress bar
             if (task.status != InjectionTaskStatus.DONE && task.status != InjectionTaskStatus.ERROR) {

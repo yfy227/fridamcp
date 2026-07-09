@@ -52,6 +52,7 @@ class McpServerService : Service() {
     }
 
     private var running = false
+    private var serverStartTime: Long = 0
     private var serverSocket: ServerSocket? = null
     private val sessions = ConcurrentHashMap<String, McpSession>()
 
@@ -95,6 +96,7 @@ class McpServerService : Service() {
         }
 
         running = true
+        serverStartTime = System.currentTimeMillis()
         Thread {
             try {
                 serverSocket = ServerSocket(PORT, 10, java.net.InetAddress.getByName("127.0.0.1"))
@@ -574,7 +576,12 @@ class McpServerService : Service() {
                     return textResult(sb.toString())
                 }
 
-                "list_processes" -> return textResult(ShizukuManager.execShell("ps -e -o PID,NAME 2>/dev/null || ps -A"))
+                "list_processes" -> {
+                    if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
+                        return textResult("Error: 需要 Shizuku/Root 权限才能列出所有进程")
+                    }
+                    return textResult(ShizukuManager.execShell("ps -e -o PID,NAME 2>/dev/null || ps -A"))
+                }
 
                 "launch_app" -> {
                     val pkg = args.optString("package_name")
@@ -600,26 +607,49 @@ class McpServerService : Service() {
                 }
 
                 "get_system_status" -> {
+                    val uptime = if (running && serverStartTime > 0) System.currentTimeMillis() - serverStartTime else 0
                     val status = JSONObject()
                         .put("sessions", sessions.size)
                         .put("permission", ShizukuManager.currentMode.toString())
                         .put("port", PORT)
                         .put("frida_server_running", ShizukuManager.isFridaServerRunning())
-                        .put("uptime_ms", System.currentTimeMillis() - (sessions.values.minOfOrNull { System.currentTimeMillis() } ?: System.currentTimeMillis()))
+                        .put("uptime_ms", uptime)
                     return textResult(status.toString(2))
                 }
 
-                "list_files" -> return textResult(ShizukuManager.execShell("ls -la '${args.optString("path")}'"))
+                "list_files" -> {
+                    if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
+                        return textResult("Error: 需要 Shizuku/Root 权限")
+                    }
+                    val path = args.optString("path").replace("'", "'\''")
+                    return textResult(ShizukuManager.execShell("ls -la '$path'"))
+                }
 
-                "read_file" -> return textResult(ShizukuManager.execShell("head -c ${args.optInt("max_size", 4096)} '${args.optString("path")}' 2>&1 | cat -v"))
+                "read_file" -> {
+                    if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
+                        return textResult("Error: 需要 Shizuku/Root 权限")
+                    }
+                    val path = args.optString("path").replace("'", "'\''")
+                    return textResult(ShizukuManager.execShell("head -c ${args.optInt("max_size", 4096)} '$path' 2>&1 | cat -v"))
+                }
 
-                "get_app_info" -> return textResult(ShizukuManager.execShell("dumpsys package ${args.optString("package_name")} | head -50"))
+                "get_app_info" -> {
+                    if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
+                        return textResult("Error: 需要 Shizuku/Root 权限")
+                    }
+                    return textResult(ShizukuManager.execShell("dumpsys package ${args.optString("package_name")} | head -50"))
+                }
 
                 "ui_tap" -> return textResult("Tapped (${args.optInt("x")}, ${args.optInt("y")})\n${ShizukuManager.execShell("input tap ${args.optInt("x")} ${args.optInt("y")}")}")
 
                 "ui_swipe" -> return textResult(ShizukuManager.execShell("input swipe ${args.optInt("x1")} ${args.optInt("y1")} ${args.optInt("x2")} ${args.optInt("y2")}"))
 
-                "ui_input_text" -> return textResult(ShizukuManager.execShell("input text '${args.optString("text")}'"))
+                "ui_input_text" -> {
+                    val text = args.optString("text")
+                    // 避免 shell 注入: 用 Base64 编码传递
+                    val b64 = android.util.Base64.encodeToString(text.toByteArray(), android.util.Base64.NO_WRAP)
+                    return textResult(ShizukuManager.execShell("echo '$b64' | base64 -d | xargs -0 input text"))
+                }
 
                 "ui_press_key" -> return textResult(ShizukuManager.execShell("input keyevent ${args.optString("keycode")}"))
 
@@ -632,7 +662,8 @@ class McpServerService : Service() {
                 "get_logcat" -> {
                     val lines = args.optInt("lines", 100)
                     val filter = args.optString("filter", "")
-                    val cmd = if (filter.isNotBlank()) "logcat -d -t $lines | grep -i '$filter'" else "logcat -d -t $lines"
+                    val safeFilter = filter.replace("'", "'\''").replace(";", "").replace("|", "").replace("&", "")
+                    val cmd = if (safeFilter.isNotBlank()) "logcat -d -t $lines | grep -i '$safeFilter'" else "logcat -d -t $lines"
                     return textResult(ShizukuManager.execShell(cmd))
                 }
 
@@ -662,13 +693,10 @@ class McpServerService : Service() {
                         address.toLongOrNull()?.toString() ?: "0"
                     }
 
-                    // 通过 root 执行: 先用 gdb 附加(如果有), 否则直接读 /proc/PID/mem
-                    // 注意: /proc/PID/mem 需要 ptrace attach 才能读取
-                    // 在 Android root 下, 可以用 busybox 或 toybox 的 devmem
-                    // 或者编译一个小的 native helper: ptrace(PTRACE_ATTACH) → pread /proc/PID/mem → ptrace(PTRACE_DETACH)
-                    // 这里使用 root 下直接读 /proc/PID/mem (某些 root 实现允许)
-                    // 同时尝试用 gdb (如果安装了)
-                    val cmd = """# 方法1: 直接读 /proc/PID/mem (需要 root, 某些内核允许)
+                    // /proc/PID/mem 需要 ptrace(PTRACE_ATTACH) 才能读取
+                    // ptrace 是内核 syscall, 不是 shell 命令
+                    // 在 Android 上可以通过 gdb (如果有) 或编译 native helper
+                    val cmd = """# 方法1: 使用 gdb (如果安装了)
                         # 方法2: 使用 gdb (如果安装了)
                         which gdb >/dev/null 2>&1 && {
                             gdb -batch -ex "attach $pid" -ex "x/${size}xb $decimalAddr" -ex "detach" 2>&1
@@ -854,6 +882,7 @@ class McpServerService : Service() {
 
     private fun stopServer() {
         running = false
+        serverStartTime = 0
 
         for (session in sessions.values) {
             try {

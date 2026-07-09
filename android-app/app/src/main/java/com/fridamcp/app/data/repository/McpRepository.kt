@@ -62,10 +62,7 @@ class McpRepository(private val context: Context) {
     private val _tasks = MutableStateFlow<List<InjectionTask>>(emptyList())
     val tasks: StateFlow<List<InjectionTask>> = _tasks.asStateFlow()
 
-    /** 真实工具总数 = 所有启用模块的 toolCount 之和 */
-    private fun computeToolCount(): Int = _modules.value.filter { it.enabled }.sumOf { it.toolCount }
-
-    /**
+/**
      * 启动 MCP 服务器 — 先启动服务，由服务回调确认状态
      * 不在这里假设成功
      */
@@ -170,7 +167,6 @@ class McpRepository(private val context: Context) {
         appName: String,
         packageName: String,
         arch: String,
-        useApktool: Boolean,
     ): InjectionTask {
         val task = InjectionTask(
             id = "task-${System.currentTimeMillis()}",
@@ -180,7 +176,6 @@ class McpRepository(private val context: Context) {
             status = InjectionTaskStatus.INJECTING,
             progress = 0,
             arch = arch,
-            useApktool = useApktool,
             createdAt = System.currentTimeMillis(),
         )
         _tasks.value = listOf(task) + _tasks.value

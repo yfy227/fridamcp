@@ -46,7 +46,7 @@ class DeviceRepository(private val context: Context) {
             androidVersion = Build.VERSION.RELEASE,
             apiLevel = Build.VERSION.SDK_INT,
             arch = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown",
-            isRooted = isRooted || isShizuku,
+            isRooted = isRooted, // 只表示真实 Root, 不包含 Shizuku
             fridaServerVersion = fridaVersion,
             fridaServerRunning = fridaRunning,
         )

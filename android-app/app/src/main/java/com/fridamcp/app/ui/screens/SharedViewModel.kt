@@ -384,10 +384,9 @@ class SharedViewModel(
         appName: String,
         packageName: String,
         arch: String,
-        useApktool: Boolean,
     ): InjectionTask {
         mcpRepository.addLog(LogLevel.INFO, "ApkInjector", "开始注入: $appName ($packageName) [$arch]")
-        val task = mcpRepository.createInjectionTask(apkPath, appName, packageName, arch, useApktool)
+        val task = mcpRepository.createInjectionTask(apkPath, appName, packageName, arch)
 
         Thread {
             try {

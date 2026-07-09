@@ -54,24 +54,36 @@ class InjectionDetector(private val context: Context) {
         )
     }
 
-    /** Layer 2: Runtime detection — check /proc/[pid]/maps */
+    /** Layer 2: Runtime detection — check /proc/[pid]/maps
+     * Android 10+ 限制 /proc 访问, 需要 Shizuku/Root
+     */
     fun detectRuntime(pid: Int): DetectionResult {
         try {
+            // 先尝试直接读 (Android 9 或以下, 或自身进程)
             val mapsFile = File("/proc/$pid/maps")
-            if (!mapsFile.exists()) {
-                return DetectionResult(
-                    detected = false,
-                    method = DetectionMethod.NONE,
-                    details = "进程 $pid 不存在",
-                )
-            }
-            val maps = mapsFile.readText()
-            if (maps.contains("frida-gadget") || maps.contains("libgadget")) {
-                return DetectionResult(
-                    detected = true,
-                    method = DetectionMethod.RUNTIME,
-                    details = "在进程 $pid 的内存映射中发现 frida-gadget",
-                )
+            if (mapsFile.exists()) {
+                val maps = mapsFile.readText()
+                if (maps.contains("frida-gadget") || maps.contains("libgadget")) {
+                    return DetectionResult(
+                        detected = true,
+                        method = DetectionMethod.RUNTIME,
+                        details = "在进程 $pid 的内存映射中发现 frida-gadget",
+                    )
+                }
+            } else {
+                // /proc 不可读 — Android 10+ 需要 Shizuku/Root
+                if (ShizukuManager.currentMode != ShizukuManager.PermissionMode.NONE) {
+                    val mapsResult = ShizukuManager.execShell(
+                        "cat /proc/$pid/maps 2>/dev/null | grep -i -e frida -e gadget"
+                    )
+                    if (mapsResult.isNotBlank() && !mapsResult.contains("Error")) {
+                        return DetectionResult(
+                            detected = true,
+                            method = DetectionMethod.RUNTIME,
+                            details = "在进程 $pid 的内存映射中发现 frida-gadget (via ${ShizukuManager.currentMode})",
+                        )
+                    }
+                }
             }
         } catch (e: Exception) {
             return DetectionResult(

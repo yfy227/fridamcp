@@ -217,8 +217,9 @@ fun SettingsScreen(
                     Spacer(modifier = Modifier.height(12.dp))
                     SettingRow("版本", "1.0.0")
                     SettingRow("构建", "android-native")
-                    SettingRow("Frida 兼容", "16+")
-                    SettingRow("MCP 协议", "1.0")
+                    SettingRow("Frida 版本", viewModel.fridaVersion ?: "未检测到")
+                    SettingRow("frida-server", if (viewModel.fridaServerRunning) "运行中" else "未运行")
+                    SettingRow("MCP 协议", "2024-11-05")
                     SettingRow("许可证", "MIT")
                 }
             }

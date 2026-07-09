@@ -17,16 +17,17 @@ import java.util.zip.ZipOutputStream
 /**
  * APK Injector — on-device frida-gadget 注入
  *
- * 注入流程:
+ * 完整流程:
  * 1. 检测 APK 架构 (从 lib/ 条目)
- * 2. 复制原始 APK
- * 3. 获取 frida-gadget.so (assets 或下载)
- * 4. 添加 gadget 到 lib/<arch>/ + config JSON
- * 5. 签名 APK (v1 JAR 签名, 使用 BouncyCastle 或 shell jarsigner)
+ * 2. 获取 frida-gadget.so (assets 或从 GitHub 下载, 用纯 Java XZ 解压)
+ * 3. 复制 APK, 添加 gadget 到 lib/<arch>/ + config JSON
+ * 4. v1 JAR 签名 (纯 Java: RSA 密钥 + 手动 DER PKCS#7, 不依赖 keytool/jarsigner/apksigner)
  *
- * 注意: Android 不会自动加载 lib/\*.so — 需要 smali patch 添加
- * System.loadLibrary("frida-gadget")。smali patch 需要 apktool (Android 上不可用)。
- * 推荐使用 frida-server spawn 模式替代 APK 注入。
+ * 限制: 不修改 smali (apktool 在 Android 上不可用)
+ * → gadget 不会自动加载, 用户需要:
+ *   a) 在 PC 上用 apktool 添加 System.loadLibrary("frida-gadget"), 或
+ *   b) 使用 frida-server spawn 模式 (不需要修改 APK)
+ * 注入后的 APK 包含 gadget .so 但需要 smali patch 才能生效
  */
 class ApkInjector(private val context: Context) {
 
@@ -40,45 +41,38 @@ class ApkInjector(private val context: Context) {
     fun inject(apkPath: String, arch: String = "auto"): Result {
         try {
             val sourceApk = File(apkPath)
-            if (!sourceApk.exists()) {
-                return Result.Error("APK 不存在: $apkPath")
-            }
+            if (!sourceApk.exists()) return Result.Error("APK 不存在: $apkPath")
 
-            // Step 1: 检测架构
+            // Step 1: 架构检测
             val detectedArch = if (arch == "auto" || arch.isBlank()) {
-                detectArch(sourceApk) ?: return Result.Error("无法检测 APK 架构 — 请手动指定 (arm64-v8a, armeabi-v7a, x86_64)")
+                detectArch(sourceApk) ?: return Result.Error("无法检测 APK 架构")
             } else {
                 if (arch !in SUPPORTED_ARCHS) return Result.Error("不支持的架构: $arch")
                 arch
             }
-            Log.i(TAG, "Detected arch: $detectedArch")
+            Log.i(TAG, "Arch: $detectedArch")
 
-            // Step 2: 准备输出路径
-            val outputApk = File(sourceApk.parentFile, sourceApk.nameWithoutExtension + "_injected.apk")
-
-            // Step 3: 获取 frida-gadget.so
+            // Step 2: 获取 gadget
             var gadgetData: ByteArray? = getGadgetFromAssets(detectedArch)
             if (gadgetData == null) {
-                Log.i(TAG, "Gadget not in assets, downloading...")
+                Log.i(TAG, "Downloading gadget...")
                 gadgetData = downloadGadget(detectedArch)
             }
             if (gadgetData == null || gadgetData.size < 1000) {
-                return Result.Error(
-                    "无法获取 frida-gadget.so\n" +
-                    "请手动下载 frida-gadget-${detectedArch}.so\n" +
-                    "放到 app/src/main/assets/gadgets/$detectedArch/libfrida-gadget.so\n" +
-                    "下载: https://github.com/frida/frida/releases"
-                )
+                return Result.Error("无法获取 frida-gadget.so\n请手动放到 assets/gadgets/$detectedArch/libfrida-gadget.so")
             }
-            Log.i(TAG, "Gadget size: ${gadgetData.size} bytes")
 
-            // Step 4: 复制 APK 并注入 gadget
+            // Step 3: 注入
+            val outputApk = File(sourceApk.parentFile, sourceApk.nameWithoutExtension + "_injected.apk")
             copyAndInject(sourceApk, outputApk, detectedArch, gadgetData)
 
-            // Step 5: 签名 APK
-            val signSuccess = signApk(outputApk)
-            if (!signSuccess) {
-                Log.w(TAG, "APK signing failed — APK needs manual signing before install")
+            // Step 4: 签名
+            val signOk = signApkV1(outputApk)
+            if (!signOk) {
+                return Result.Error(
+                    "APK 已注入但签名失败 — 无法安装\n" +
+                    "请在 PC 上签名: apksigner sign --ks debug.keystore --ks-pass pass:android '$outputApk'"
+                )
             }
 
             return Result.Success(outputApk.absolutePath)
@@ -95,7 +89,7 @@ class ApkInjector(private val context: Context) {
                 val entries = zip.entries()
                 while (entries.hasMoreElements()) {
                     val name = entries.nextElement().name
-                    if (name.startsWith("lib/") && name.count { it == '/' } >= 2) {
+                    if (name.startsWith("lib/")) {
                         val arch = name.substringAfter("lib/").substringBefore("/")
                         if (arch in SUPPORTED_ARCHS) archs.add(arch)
                     }
@@ -104,132 +98,261 @@ class ApkInjector(private val context: Context) {
                     ?: archs.firstOrNull { it == "x86_64" }
                     ?: archs.firstOrNull()
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "detectArch failed", e)
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     private fun copyAndInject(sourceApk: File, outputApk: File, arch: String, gadgetData: ByteArray) {
         val configData = GADGET_CONFIG.toByteArray()
-
         ZipFile(sourceApk).use { zip ->
             ZipOutputStream(FileOutputStream(outputApk)).use { zos ->
-                val existingEntries = mutableSetOf<String>()
+                val existing = mutableSetOf<String>()
                 val entries = zip.entries()
                 while (entries.hasMoreElements()) {
                     val entry = entries.nextElement()
-                    existingEntries.add(entry.name)
-
+                    existing.add(entry.name)
+                    // 跳过旧签名
                     if (entry.name.startsWith("META-INF/") &&
                         (entry.name.endsWith(".SF") || entry.name.endsWith(".RSA") ||
-                         entry.name.endsWith(".DSA") || entry.name.endsWith(".MF"))) {
-                        continue
-                    }
-
+                         entry.name.endsWith(".DSA") || entry.name.endsWith(".MF"))) continue
                     zos.putNextEntry(ZipEntry(entry.name))
-                    if (!entry.isDirectory) {
-                        zip.getInputStream(entry).copyTo(zos)
-                    }
+                    if (!entry.isDirectory) zip.getInputStream(entry).copyTo(zos)
                     zos.closeEntry()
                 }
-
-                // 添加 frida-gadget.so
-                val gadgetPath = "lib/$arch/libfrida-gadget.so"
-                if (gadgetPath !in existingEntries) {
-                    zos.putNextEntry(ZipEntry(gadgetPath))
-                    zos.write(gadgetData)
-                    zos.closeEntry()
-                    Log.i(TAG, "Added: $gadgetPath (${gadgetData.size} bytes)")
+                // frida-gadget.so
+                val gadget = "lib/$arch/libfrida-gadget.so"
+                if (gadget !in existing) {
+                    zos.putNextEntry(ZipEntry(gadget)); zos.write(gadgetData); zos.closeEntry()
                 }
-
-                // 添加 gadget config
-                val configPath = "lib/$arch/libfrida-gadget.config.so"
-                if (configPath !in existingEntries) {
-                    zos.putNextEntry(ZipEntry(configPath))
-                    zos.write(configData)
-                    zos.closeEntry()
-                    Log.i(TAG, "Added: $configPath")
-                }
-
-                // 其他架构也添加
-                for (otherArch in SUPPORTED_ARCHS) {
-                    if (otherArch == arch) continue
-                    val otherGadget = "lib/$otherArch/libfrida-gadget.so"
-                    val otherConfig = "lib/$otherArch/libfrida-gadget.config.so"
-                    if (otherGadget !in existingEntries && existingEntries.any { it.startsWith("lib/$otherArch/") }) {
-                        zos.putNextEntry(ZipEntry(otherGadget))
-                        zos.write(gadgetData)
-                        zos.closeEntry()
-                        zos.putNextEntry(ZipEntry(otherConfig))
-                        zos.write(configData)
-                        zos.closeEntry()
-                        Log.i(TAG, "Added gadget for $otherArch")
-                    }
+                // config
+                val config = "lib/$arch/libfrida-gadget.config.so"
+                if (config !in existing) {
+                    zos.putNextEntry(ZipEntry(config)); zos.write(configData); zos.closeEntry()
                 }
             }
         }
     }
 
-    /**
-     * 签名 APK — 通过 Shizuku/Root 使用 jarsigner
-     * 
-     * Android 上没有 keytool/jarsigner/apksigner (这些是 JDK 工具)
-     * 但某些 Magisk 模块或 termux 可能安装了它们
-     * 
-     * 如果没有, APK 需要在 PC 上用 apksigner 签名:
-     *   apksigner sign --ks debug.keystore --ks-pass pass:android app.apk
-     */
-    private fun signApk(apkFile: File): Boolean {
-        return signApkViaShell(apkFile)
-    }
+    // ============================================================
+    // 签名 — 纯 Java v1 JAR 签名
+    // 不依赖 keytool/jarsigner/apksigner (JDK 工具, Android 不存在)
+    // 不依赖 BouncyCastle (Android 内置版本 API 不完整)
+    // ============================================================
 
-        private fun signApkViaShell(apkFile: File): Boolean {
+    private fun signApkV1(apkFile: File): Boolean {
         return try {
-            val apkPath = apkFile.absolutePath
-            val result = ShizukuManager.execShell(
-                "KS=/data/local/tmp/fridamcp.keystore\n" +
-                "if [ ! -f \$KS ]; then\n" +
-                "  keytool -genkey -v -keystore \$KS -alias fridamcp -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname 'CN=FridaMCP' 2>/dev/null\n" +
-                "fi\n" +
-                "if [ -f \$KS ]; then\n" +
-                "  jarsigner -sigalg SHA256withRSA -digestalg SHA-256 -keystore \$KS -storepass android -keypass android '$apkPath' fridamcp 2>&1 | tail -3\n" +
-                "  echo SHELL_SIGN_OK\n" +
-                "else\n" +
-                "  echo SHELL_SIGN_FAIL\n" +
-                "fi"
-            )
-            if (result.contains("SHELL_SIGN_OK")) {
-                Log.i(TAG, "APK signed via shell jarsigner")
-                true
-            } else {
-                Log.w(TAG, "Shell signing failed: $result")
-                false
+            // 1. 生成 RSA 2048 密钥对
+            val keyGen = KeyPairGenerator.getInstance("RSA")
+            keyGen.initialize(2048)
+            val keyPair = keyGen.generateKeyPair()
+
+            // 2. 生成自签名 X.509 证书 (手动 DER 编码)
+            val certDer = generateSelfSignedCertDer(keyPair)
+
+            // 3. 读取所有非 META-INF 条目
+            val entries = mutableMapOf<String, ByteArray>()
+            ZipFile(apkFile).use { zip ->
+                val it = zip.entries()
+                while (it.hasMoreElements()) {
+                    val entry = it.nextElement()
+                    if (!entry.isDirectory && !entry.name.startsWith("META-INF/")) {
+                        entries[entry.name] = zip.getInputStream(entry).readBytes()
+                    }
+                }
             }
+
+            // 4. 生成 MANIFEST.MF
+            val manifest = StringBuilder()
+            manifest.append("Manifest-Version: 1.0\n")
+            manifest.append("Created-By: FridaMCP 1.0\n\n")
+            for ((name, data) in entries) {
+                val sha256 = MessageDigest.getInstance("SHA-256").digest(data)
+                val b64 = android.util.Base64.encodeToString(sha256, android.util.Base64.NO_WRAP)
+                manifest.append("Name: $name\n")
+                manifest.append("SHA-256-Digest: $b64\n\n")
+            }
+            val manifestBytes = manifest.toString().toByteArray()
+
+            // 5. 生成 CERT.SF
+            val certSf = StringBuilder()
+            certSf.append("Signature-Version: 1.0\n")
+            certSf.append("Created-By: FridaMCP 1.0\n")
+            val manifestHash = MessageDigest.getInstance("SHA-256").digest(manifestBytes)
+            certSf.append("SHA-256-Digest-Manifest: ${android.util.Base64.encodeToString(manifestHash, android.util.Base64.NO_WRAP)}\n\n")
+            for ((name, _) in entries) {
+                val entryLine = "Name: $name\n"
+                val entryHash = MessageDigest.getInstance("SHA-256").digest(entryLine.toByteArray())
+                certSf.append("Name: $name\n")
+                certSf.append("SHA-256-Digest: ${android.util.Base64.encodeToString(entryHash, android.util.Base64.NO_WRAP)}\n\n")
+            }
+            val certSfBytes = certSf.toString().toByteArray()
+
+            // 6. 签名 CERT.SF
+            val sig = Signature.getInstance("SHA256withRSA")
+            sig.initSign(keyPair.private)
+            sig.update(certSfBytes)
+            val sigBytes = sig.sign()
+
+            // 7. 构建 PKCS#7 SignedData (手动 DER)
+            val pkcs7 = buildPkcs7SignedData(certDer, keyPair, sigBytes)
+
+            // 8. 写回 APK
+            val signedApk = File(apkFile.parentFile, apkFile.name + ".signed")
+            ZipOutputStream(FileOutputStream(signedApk)).use { zos ->
+                ZipFile(apkFile).use { zip ->
+                    val it = zip.entries()
+                    while (it.hasMoreElements()) {
+                        val entry = it.nextElement()
+                        if (!entry.name.startsWith("META-INF/")) {
+                            zos.putNextEntry(ZipEntry(entry.name))
+                            if (!entry.isDirectory) zip.getInputStream(entry).copyTo(zos)
+                            zos.closeEntry()
+                        }
+                    }
+                }
+                zos.putNextEntry(ZipEntry("META-INF/MANIFEST.MF")); zos.write(manifestBytes); zos.closeEntry()
+                zos.putNextEntry(ZipEntry("META-INF/CERT.SF")); zos.write(certSfBytes); zos.closeEntry()
+                zos.putNextEntry(ZipEntry("META-INF/CERT.RSA")); zos.write(pkcs7); zos.closeEntry()
+            }
+            apkFile.delete()
+            signedApk.renameTo(apkFile)
+            Log.i(TAG, "APK signed (v1 JAR, pure Java)")
+            true
         } catch (e: Exception) {
-            Log.w(TAG, "Shell signing error: ${e.message}")
+            Log.e(TAG, "signApkV1 failed: ${e.message}")
             false
         }
     }
 
-    private fun getGadgetFromAssets(arch: String): ByteArray? {
-        return try {
-            val assetPath = "gadgets/$arch/libfrida-gadget.so"
-            context.assets.open(assetPath).use { input ->
-                val buffer = ByteArrayOutputStream()
-                input.copyTo(buffer)
-                val data = buffer.toByteArray()
-                if (data.size > 1000) data else null
-            }
-        } catch (e: Exception) {
-            null
-        }
+    /** 生成自签名 X.509 证书 — 手动 DER 编码 */
+    private fun generateSelfSignedCertDer(keyPair: java.security.KeyPair): ByteArray {
+        // 使用 Android 内置的 java.security.cert.X509Certificate 生成
+        // Android 没有 X509v3CertificateBuilder, 但有 sun.security 不存在
+        // 用最简方式: 手动构建 DER
+        val notBefore = java.util.Date()
+        val notAfter = java.util.Date(notBefore.time + 365L * 24 * 60 * 60 * 1000)
+        val serial = java.math.BigInteger.valueOf(System.currentTimeMillis())
+
+        // 手动 DER 编码 X.509 证书
+        return buildX509CertDer(
+            serial,
+            notBefore,
+            notAfter,
+            keyPair.public,
+            keyPair.private
+        )
     }
 
-    /**
-     * 下载 frida-gadget.so — 使用 HttpURLConnection
-     * 解压 XZ: 先用 toybox xz (Android 6+), 再用 python3 lzma
-     */
+    /** 手动构建 X.509 证书 DER */
+    private fun buildX509CertDer(
+        serial: java.math.BigInteger,
+        notBefore: java.util.Date,
+        notAfter: java.util.Date,
+        publicKey: java.security.PublicKey,
+        privateKey: java.security.PrivateKey
+    ): ByteArray {
+        val der = DerEncoder()
+
+        // SubjectPublicKeyInfo (直接用 public key 的 encoded 格式)
+        val spki = publicKey.encoded
+
+        // Subject/Issuer: CN=FridaMCP
+        val name = DerEncoder()
+        name.addSequence(DerEncoder().addSet(DerEncoder().addOid(intArrayOf(2, 5, 4, 3)).addUtf8String("FridaMCP")).build()).build()
+
+        // Validity
+        val validity = DerEncoder()
+        validity.addUtcTime(notBefore)
+        validity.addUtcTime(notAfter)
+
+        // TBSCertificate
+        val tbs = DerEncoder()
+        tbs.addExplicit(0, DerEncoder().addInteger(2).build()) // version v3
+        tbs.addInteger(serial)
+        tbs.addSequence(DerEncoder().addOid(intArrayOf(1, 2, 840, 113549, 1, 1, 11)).build()) // sha256WithRSAEncryption
+        tbs.addRaw(name) // issuer
+        tbs.addRaw(validity.build()) // validity
+        tbs.addRaw(name) // subject
+        tbs.addRaw(spki) // subjectPublicKeyInfo
+
+        val tbsBytes = tbs.build()
+
+        // 签名
+        val sig = Signature.getInstance("SHA256withRSA")
+        sig.initSign(privateKey)
+        sig.update(tbsBytes)
+        val sigBytes = sig.sign()
+
+        // Certificate = SEQUENCE { tbsCertificate, signatureAlgorithm, signatureValue }
+        val cert = DerEncoder()
+        cert.addRaw(tbsBytes)
+        cert.addSequence(DerEncoder().addOid(intArrayOf(1, 2, 840, 113549, 1, 1, 11)).build())
+        cert.addBitString(sigBytes)
+
+        return cert.build()
+    }
+
+    /** 构建 PKCS#7 SignedData DER */
+    private fun buildPkcs7SignedData(certDer: ByteArray, keyPair: java.security.KeyPair, signature: ByteArray): ByteArray {
+        // PKCS#7 SignedData 结构:
+        // SEQUENCE {
+        //   OID 1.2.840.113549.1.7.2 (signedData)
+        //   [0] {
+        //     SEQUENCE {
+        //       INTEGER 1 (version)
+        //       SET {} (digestAlgorithms - empty)
+        //       SEQUENCE { OID 1.2.840.113549.1.7.1 (data) } (contentInfo)
+        //       [0] { certDer } (certificates)
+        //       SET { SignerInfo }
+        //     }
+        //   }
+        // }
+
+        // 从证书 DER 中提取 issuer 和 serial number
+        // 简化: 直接硬编码 (因为我们生成的证书是固定的)
+        val issuerDer = DerEncoder()
+            .addSequence(DerEncoder().addSet(DerEncoder().addOid(intArrayOf(2, 5, 4, 3)).addUtf8String("FridaMCP")).build())
+            .build()
+        val serial = java.math.BigInteger.valueOf(System.currentTimeMillis())
+
+        // SignerInfo
+        val signerInfo = DerEncoder()
+        signerInfo.addInteger(1) // version
+        signerInfo.addSequence(issuerDer) // issuerAndSerialNumber: issuer
+        signerInfo.addInteger(serial) // issuerAndSerialNumber: serial
+        signerInfo.addSequence(DerEncoder().addOid(intArrayOf(2, 16, 840, 1, 101, 3, 4, 2, 1)).build()) // sha256 digestAlgorithm
+        signerInfo.addSequence(DerEncoder().addOid(intArrayOf(1, 2, 840, 113549, 1, 1, 1)).build()) // rsaEncryption signatureAlgorithm
+        signerInfo.addOctetString(signature) // signature
+
+        // SignedData
+        val signedData = DerEncoder()
+        signedData.addInteger(1) // version
+        signedData.addSet(emptyList()) // digestAlgorithms (empty)
+        signedData.addSequence(DerEncoder().addOid(intArrayOf(1, 2, 840, 113549, 1, 7, 1)).build()) // contentInfo
+        signedData.addExplicit(0, certDer) // certificates
+        signedData.addSet(listOf(signerInfo.build())) // signerInfos
+
+        // ContentInfo
+        val contentInfo = DerEncoder()
+        contentInfo.addOid(intArrayOf(1, 2, 840, 113549, 1, 7, 2)) // signedData OID
+        contentInfo.addExplicit(0, signedData.build())
+
+        return contentInfo.build()
+    }
+
+    // ============================================================
+    // Gadget 下载 — 纯 Java HttpURLConnection + XZ 解压
+    // ============================================================
+
+    private fun getGadgetFromAssets(arch: String): ByteArray? {
+        return try {
+            context.assets.open("gadgets/$arch/libfrida-gadget.so").use { input ->
+                val buf = ByteArrayOutputStream()
+                input.copyTo(buf)
+                buf.toByteArray().takeIf { it.size > 1000 }
+            }
+        } catch (e: Exception) { null }
+    }
+
     private fun downloadGadget(arch: String): ByteArray? {
         return try {
             val version = getLatestFridaVersion() ?: "16.5.9"
@@ -240,51 +363,29 @@ class ApkInjector(private val context: Context) {
                 "x86" -> "x86"
                 else -> "arm64"
             }
-
             val url = GADGET_URL_TEMPLATE.format(version, version, fridaArch)
-            Log.i(TAG, "Downloading gadget from: $url")
+            Log.i(TAG, "Downloading: $url")
 
             val conn = URL(url).openConnection() as HttpURLConnection
             conn.connectTimeout = 30000
             conn.readTimeout = 60000
             conn.instanceFollowRedirects = true
+            if (conn.responseCode != 200) { Log.e(TAG, "HTTP ${conn.responseCode}"); return null }
 
-            if (conn.responseCode != 200) {
-                Log.e(TAG, "Download failed: HTTP ${conn.responseCode}")
-                return null
-            }
-
-            val compressedData = conn.inputStream.readBytes()
+            val xzData = conn.inputStream.readBytes()
             conn.disconnect()
+            if (xzData.size < 1000) return null
 
-            if (compressedData.size < 1000) return null
-
-            // 解压 XZ — 使用 toybox (Android 6+ 内置) 或 python3
-            val tmpXz = File(context.cacheDir, "gadget_${arch}.so.xz")
-            val tmpSo = File(context.cacheDir, "gadget_${arch}.so")
-            tmpXz.writeBytes(compressedData)
-
-            // 方法1: toybox xz
-            ShizukuManager.execShell("xz -d -c '${tmpXz.absolutePath}' > '${tmpSo.absolutePath}' 2>&1")
-
-            if (!tmpSo.exists() || tmpSo.length() < 10000) {
-                // 方法2: python3 lzma
-                ShizukuManager.execShell(
-                    "python3 -c \"import lzma; open('${tmpSo.absolutePath}','wb').write(lzma.decompress(open('${tmpXz.absolutePath}','rb').read()))\" 2>&1"
-                )
-            }
-
-            tmpXz.delete()
-            if (tmpSo.exists() && tmpSo.length() > 10000) {
-                val data = tmpSo.readBytes()
-                tmpSo.delete()
-                return data
-            }
-
-            Log.e(TAG, "XZ decompress failed — no xz or python3 available")
-            null
+            // 纯 Java XZ 解压 — 不依赖 xz 命令或 python3
+            val decompressor = org.tukaani.xz.XZInputStream(xzData.inputStream())
+            val output = ByteArrayOutputStream()
+            decompressor.copyTo(output)
+            decompressor.close()
+            val soData = output.toByteArray()
+            Log.i(TAG, "Decompressed: ${xzData.size} → ${soData.size} bytes")
+            soData.takeIf { it.size > 10000 }
         } catch (e: Exception) {
-            Log.e(TAG, "downloadGadget failed: ${e.message}")
+            Log.e(TAG, "downloadGadget: ${e.message}")
             null
         }
     }
@@ -295,21 +396,116 @@ class ApkInjector(private val context: Context) {
             conn.connectTimeout = 10000
             conn.readTimeout = 10000
             conn.setRequestProperty("Accept", "application/vnd.github.v3+json")
-
             if (conn.responseCode != 200) return null
-
             val json = org.json.JSONObject(conn.inputStream.bufferedReader().readText())
             conn.disconnect()
-
             json.optString("tag_name", "").ifBlank { null }
-        } catch (e: Exception) {
-            Log.w(TAG, "getLatestFridaVersion failed: ${e.message}")
-            null
-        }
+        } catch (e: Exception) { null }
     }
 
     sealed class Result {
         data class Success(val outputPath: String) : Result()
         data class Error(val message: String) : Result()
+    }
+}
+
+// ============================================================
+// 最小 DER 编码器 — 用于 PKCS#7/JAR 签名
+// ============================================================
+
+private class DerEncoder {
+    private val parts = mutableListOf<ByteArray>()
+
+    fun build(): ByteArray = parts.fold(ByteArray(0)) { acc, part -> acc + part }
+
+    fun addRaw(data: ByteArray): DerEncoder { parts.add(data); return this }
+
+    fun addInteger(value: Int): DerEncoder = addInteger(java.math.BigInteger.valueOf(value.toLong()))
+    fun addInteger(value: java.math.BigInteger): DerEncoder {
+        val bytes = value.toByteArray()
+        parts.add(encodeTagLen(0x02, bytes.size) + bytes)
+        return this
+    }
+
+    fun addOid(oid: IntArray): DerEncoder {
+        val out = ByteArrayOutputStream()
+        out.write(40 * oid[0] + oid[1])
+        for (i in 2 until oid.size) {
+            var v = oid[i]
+            if (v < 128) {
+                out.write(v)
+            } else {
+                val stack = mutableListOf<Int>()
+                stack.add(v and 0x7F)
+                v = v ushr 7
+                while (v > 0) {
+                    stack.add((v and 0x7F) or 0x80)
+                    v = v ushr 7
+                }
+                stack.reverse()
+                for (b in stack) out.write(b)
+            }
+        }
+        val bytes = out.toByteArray()
+        parts.add(encodeTagLen(0x06, bytes.size) + bytes)
+        return this
+    }
+
+    fun addUtf8String(s: String): DerEncoder {
+        val bytes = s.toByteArray(Charsets.UTF_8)
+        parts.add(encodeTagLen(0x0C, bytes.size) + bytes)
+        return this
+    }
+
+    fun addUtcTime(date: java.util.Date): DerEncoder {
+        val fmt = java.text.SimpleDateFormat("yyMMddHHmmss'Z'", java.util.Locale.US)
+        fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        val bytes = fmt.format(date).toByteArray()
+        parts.add(encodeTagLen(0x17, bytes.size) + bytes)
+        return this
+    }
+
+    fun addBitString(data: ByteArray): DerEncoder {
+        val bytes = ByteArray(data.size + 1)
+        bytes[0] = 0 // no unused bits
+        System.arraycopy(data, 0, bytes, 1, data.size)
+        parts.add(encodeTagLen(0x03, bytes.size) + bytes)
+        return this
+    }
+
+    fun addOctetString(data: ByteArray): DerEncoder {
+        parts.add(encodeTagLen(0x04, data.size) + data)
+        return this
+    }
+
+    fun addSequence(vararg items: ByteArray): DerEncoder = addSequence(items.toList())
+    fun addSequence(items: List<ByteArray>): DerEncoder {
+        val body = items.fold(ByteArray(0)) { acc, item -> acc + item }
+        parts.add(encodeTagLen(0x30, body.size) + body)
+        return this
+    }
+
+    fun addSet(vararg items: ByteArray): DerEncoder = addSet(items.toList())
+    fun addSet(items: List<ByteArray>): DerEncoder {
+        val body = items.fold(ByteArray(0)) { acc, item -> acc + item }
+        parts.add(encodeTagLen(0x31, body.size) + body)
+        return this
+    }
+
+    fun addExplicit(tagNum: Int, data: ByteArray): DerEncoder {
+        parts.add(encodeTagLen(0xA0 or tagNum, data.size) + data)
+        return this
+    }
+
+    private fun encodeTagLen(tag: Int, len: Int): ByteArray {
+        return if (len < 128) {
+            byteArrayOf(tag.toByte(), len.toByte())
+        } else if (len < 256) {
+            byteArrayOf(tag.toByte(), 0x81.toByte(), len.toByte())
+        } else if (len < 65536) {
+            byteArrayOf(tag.toByte(), 0x82.toByte(), (len ushr 8).toByte(), len.toByte())
+        } else {
+            byteArrayOf(tag.toByte(), 0x83.toByte(), (len ushr 16).toByte(), (len ushr 8).toByte(), len.toByte())
+        }
     }
 }

@@ -77,6 +77,9 @@ dependencies {
 
     implementation("androidx.navigation:navigation-compose:2.8.1")
 
+    // XZ — pure Java XZ decompression (for frida-gadget download)
+    implementation("org.tukaani:xz:1.9")
+
     // ViewModel & Lifecycle
     implementation("androidx.lifecycle:lifecycle-viewmodel-savedstate:2.8.6")
     implementation("androidx.lifecycle:lifecycle-service:2.8.6")
