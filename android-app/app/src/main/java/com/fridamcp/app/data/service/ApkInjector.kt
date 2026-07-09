@@ -340,6 +340,45 @@ class ApkInjector(private val context: Context) {
         } catch (e: Exception) { null }
     }
 
+    // === DER 编码辅助函数 ===
+
+    private fun encodeTagLen(tag: Int, len: Int): ByteArray = when {
+        len < 128 -> byteArrayOf(tag.toByte(), len.toByte())
+        len < 256 -> byteArrayOf(tag.toByte(), 0x81.toByte(), len.toByte())
+        len < 65536 -> byteArrayOf(tag.toByte(), 0x82.toByte(), (len ushr 8).toByte(), len.toByte())
+        else -> byteArrayOf(tag.toByte(), 0x83.toByte(), (len ushr 16).toByte(), (len ushr 8).toByte(), len.toByte())
+    }
+    private fun encodeSequence(body: ByteArray): ByteArray = encodeTagLen(0x30, body.size) + body
+    private fun encodeSet(body: ByteArray): ByteArray = encodeTagLen(0x31, body.size) + body
+    private fun encodeInteger(v: Int): ByteArray = encodeInteger(java.math.BigInteger.valueOf(v.toLong()).toByteArray())
+    private fun encodeInteger(bytes: ByteArray): ByteArray = encodeTagLen(0x02, bytes.size) + bytes
+    private fun encodeOctetString(data: ByteArray): ByteArray = encodeTagLen(0x04, data.size) + data
+    private fun encodeBitString(data: ByteArray): ByteArray {
+        val body = ByteArray(data.size + 1); body[0] = 0; System.arraycopy(data, 0, body, 1, data.size)
+        return encodeTagLen(0x03, body.size) + body
+    }
+    private fun encodeExplicit(tag: Int, data: ByteArray): ByteArray = encodeTagLen(0xA0 or tag, data.size) + data
+    private fun encodeUtf8String(s: String): ByteArray { val b = s.toByteArray(Charsets.UTF_8); return encodeTagLen(0x0C, b.size) + b }
+    private fun encodeUtcTime(d: java.util.Date): ByteArray {
+        val fmt = java.text.SimpleDateFormat("yyMMddHHmmss'Z'", java.util.Locale.US)
+        fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
+        val b = fmt.format(d).toByteArray(); return encodeTagLen(0x17, b.size) + b
+    }
+    private fun encodeOid(oid: IntArray): ByteArray {
+        val out = java.io.ByteArrayOutputStream()
+        out.write(40 * oid[0] + oid[1])
+        for (i in 2 until oid.size) {
+            var v = oid[i]
+            if (v < 128) { out.write(v) }
+            else {
+                val stack = mutableListOf<Int>(); stack.add(v and 0x7F); v = v ushr 7
+                while (v > 0) { stack.add((v and 0x7F) or 0x80); v = v ushr 7 }
+                stack.reverse(); for (b in stack) out.write(b)
+            }
+        }
+        val b = out.toByteArray(); return encodeTagLen(0x06, b.size) + b
+    }
+
     sealed class Result {
         data class Success(val outputPath: String) : Result()
         data class Error(val message: String) : Result()
