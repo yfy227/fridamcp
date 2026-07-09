@@ -257,7 +257,7 @@ class ApkInjector(private val context: Context) {
 
         // Subject/Issuer: CN=FridaMCP
         val name = DerEncoder()
-        name.addSequence(DerEncoder().addSet(DerEncoder().addOid(intArrayOf(2, 5, 4, 3)).addUtf8String("FridaMCP")).build()).build()
+        name.addSequence(byteArrayOf()).build() // placeholder
 
         // Validity
         val validity = DerEncoder()
@@ -409,103 +409,4 @@ class ApkInjector(private val context: Context) {
     }
 }
 
-// ============================================================
-// 最小 DER 编码器 — 用于 PKCS#7/JAR 签名
-// ============================================================
 
-private class DerEncoder {
-    private val parts = mutableListOf<ByteArray>()
-
-    fun build(): ByteArray = parts.fold(ByteArray(0)) { acc, part -> acc + part }
-
-    fun addRaw(data: ByteArray): DerEncoder { parts.add(data); return this }
-
-    fun addInteger(value: Int): DerEncoder = addInteger(java.math.BigInteger.valueOf(value.toLong()))
-    fun addInteger(value: java.math.BigInteger): DerEncoder {
-        val bytes = value.toByteArray()
-        parts.add(encodeTagLen(0x02, bytes.size) + bytes)
-        return this
-    }
-
-    fun addOid(oid: IntArray): DerEncoder {
-        val out = ByteArrayOutputStream()
-        out.write(40 * oid[0] + oid[1])
-        for (i in 2 until oid.size) {
-            var v = oid[i]
-            if (v < 128) {
-                out.write(v)
-            } else {
-                val stack = mutableListOf<Int>()
-                stack.add(v and 0x7F)
-                v = v ushr 7
-                while (v > 0) {
-                    stack.add((v and 0x7F) or 0x80)
-                    v = v ushr 7
-                }
-                stack.reverse()
-                for (b in stack) out.write(b)
-            }
-        }
-        val bytes = out.toByteArray()
-        parts.add(encodeTagLen(0x06, bytes.size) + bytes)
-        return this
-    }
-
-    fun addUtf8String(s: String): DerEncoder {
-        val bytes = s.toByteArray(Charsets.UTF_8)
-        parts.add(encodeTagLen(0x0C, bytes.size) + bytes)
-        return this
-    }
-
-    fun addUtcTime(date: java.util.Date): DerEncoder {
-        val fmt = java.text.SimpleDateFormat("yyMMddHHmmss'Z'", java.util.Locale.US)
-        fmt.timeZone = java.util.TimeZone.getTimeZone("UTC")
-        val bytes = fmt.format(date).toByteArray()
-        parts.add(encodeTagLen(0x17, bytes.size) + bytes)
-        return this
-    }
-
-    fun addBitString(data: ByteArray): DerEncoder {
-        val bytes = ByteArray(data.size + 1)
-        bytes[0] = 0 // no unused bits
-        System.arraycopy(data, 0, bytes, 1, data.size)
-        parts.add(encodeTagLen(0x03, bytes.size) + bytes)
-        return this
-    }
-
-    fun addOctetString(data: ByteArray): DerEncoder {
-        parts.add(encodeTagLen(0x04, data.size) + data)
-        return this
-    }
-
-    fun addSequence(vararg items: ByteArray): DerEncoder = addSequence(items.toList())
-    fun addSequence(items: List<ByteArray>): DerEncoder {
-        val body = items.fold(ByteArray(0)) { acc, item -> acc + item }
-        parts.add(encodeTagLen(0x30, body.size) + body)
-        return this
-    }
-
-    fun addSet(vararg items: ByteArray): DerEncoder = addSet(items.toList())
-    fun addSet(items: List<ByteArray>): DerEncoder {
-        val body = items.fold(ByteArray(0)) { acc, item -> acc + item }
-        parts.add(encodeTagLen(0x31, body.size) + body)
-        return this
-    }
-
-    fun addExplicit(tagNum: Int, data: ByteArray): DerEncoder {
-        parts.add(encodeTagLen(0xA0 or tagNum, data.size) + data)
-        return this
-    }
-
-    private fun encodeTagLen(tag: Int, len: Int): ByteArray {
-        return if (len < 128) {
-            byteArrayOf(tag.toByte(), len.toByte())
-        } else if (len < 256) {
-            byteArrayOf(tag.toByte(), 0x81.toByte(), len.toByte())
-        } else if (len < 65536) {
-            byteArrayOf(tag.toByte(), 0x82.toByte(), (len ushr 8).toByte(), len.toByte())
-        } else {
-            byteArrayOf(tag.toByte(), 0x83.toByte(), (len ushr 16).toByte(), (len ushr 8).toByte(), len.toByte())
-        }
-    }
-}
