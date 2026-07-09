@@ -172,167 +172,19 @@ class ApkInjector(private val context: Context) {
     }
 
     /**
-     * 签名 APK — 先尝试 BouncyCastle, 再尝试 shell jarsigner
+     * 签名 APK — 通过 Shizuku/Root 使用 jarsigner
+     * 
+     * Android 上没有 keytool/jarsigner/apksigner (这些是 JDK 工具)
+     * 但某些 Magisk 模块或 termux 可能安装了它们
+     * 
+     * 如果没有, APK 需要在 PC 上用 apksigner 签名:
+     *   apksigner sign --ks debug.keystore --ks-pass pass:android app.apk
      */
     private fun signApk(apkFile: File): Boolean {
-        // 方法1: 使用 Android 内置 BouncyCastle 手动签名
-        try {
-            val keyGen = KeyPairGenerator.getInstance("RSA")
-            keyGen.initialize(2048)
-            val keyPair = keyGen.generateKeyPair()
-
-            signJarV1(apkFile, keyPair)
-            Log.i(TAG, "APK signed with BouncyCastle v1 signature")
-            return true
-        } catch (e: Exception) {
-            Log.w(TAG, "BouncyCastle signing failed: ${e.message}")
-        }
-
-        // 方法2: 通过 Shizuku/Root 使用 jarsigner (如果可用)
         return signApkViaShell(apkFile)
     }
 
-    /**
-     * v1 JAR 签名 — 使用 Android 内置 BouncyCastle
-     * 生成 MANIFEST.MF + CERT.SF + CERT.RSA
-     */
-    private fun signJarV1(apkFile: File, keyPair: java.security.KeyPair) {
-        // 1. 读取 APK 所有非 META-INF 条目
-        val entries = mutableMapOf<String, ByteArray>()
-        ZipFile(apkFile).use { zip ->
-            val it = zip.entries()
-            while (it.hasMoreElements()) {
-                val entry = it.nextElement()
-                if (!entry.isDirectory && !entry.name.startsWith("META-INF/")) {
-                    entries[entry.name] = zip.getInputStream(entry).readBytes()
-                }
-            }
-        }
-
-        // 2. 生成 MANIFEST.MF
-        val manifest = StringBuilder()
-        manifest.append("Manifest-Version: 1.0\n")
-        manifest.append("Created-By: FridaMCP 1.0\n\n")
-        for ((name, data) in entries) {
-            val sha256 = MessageDigest.getInstance("SHA-256").digest(data)
-            val b64 = android.util.Base64.encodeToString(sha256, android.util.Base64.NO_WRAP)
-            manifest.append("Name: $name\n")
-            manifest.append("SHA-256-Digest: $b64\n\n")
-        }
-        val manifestBytes = manifest.toString().toByteArray()
-
-        // 3. 生成 CERT.SF
-        val certSf = StringBuilder()
-        certSf.append("Signature-Version: 1.0\n")
-        certSf.append("Created-By: FridaMCP 1.0\n")
-        val manifestSha256 = MessageDigest.getInstance("SHA-256").digest(manifestBytes)
-        certSf.append("SHA-256-Digest-Manifest: ${android.util.Base64.encodeToString(manifestSha256, android.util.Base64.NO_WRAP)}\n\n")
-        for ((name, _) in entries) {
-            val entryLine = "Name: $name\n"
-            val entrySha256 = MessageDigest.getInstance("SHA-256").digest(entryLine.toByteArray())
-            certSf.append("Name: $name\n")
-            certSf.append("SHA-256-Digest: ${android.util.Base64.encodeToString(entrySha256, android.util.Base64.NO_WRAP)}\n\n")
-        }
-        val certSfBytes = certSf.toString().toByteArray()
-
-        // 4. 生成 CERT.RSA — PKCS#7 签名
-        val signature = Signature.getInstance("SHA256withRSA")
-        signature.initSign(keyPair.private)
-        signature.update(certSfBytes)
-        val sigBytes = signature.sign()
-
-        // 构建 PKCS#7 SignedData — 使用 BouncyCastle
-        val pkcs7Bytes = buildPkcs7(keyPair, sigBytes, certSfBytes)
-
-        // 5. 写回 APK
-        val signedApk = File(apkFile.parentFile, apkFile.name + ".signed")
-        ZipOutputStream(FileOutputStream(signedApk)).use { zos ->
-            ZipFile(apkFile).use { zip ->
-                val it = zip.entries()
-                while (it.hasMoreElements()) {
-                    val entry = it.nextElement()
-                    if (!entry.name.startsWith("META-INF/")) {
-                        zos.putNextEntry(ZipEntry(entry.name))
-                        if (!entry.isDirectory) {
-                            zip.getInputStream(entry).copyTo(zos)
-                        }
-                        zos.closeEntry()
-                    }
-                }
-            }
-            zos.putNextEntry(ZipEntry("META-INF/MANIFEST.MF"))
-            zos.write(manifestBytes)
-            zos.closeEntry()
-            zos.putNextEntry(ZipEntry("META-INF/CERT.SF"))
-            zos.write(certSfBytes)
-            zos.closeEntry()
-            zos.putNextEntry(ZipEntry("META-INF/CERT.RSA"))
-            zos.write(pkcs7Bytes)
-            zos.closeEntry()
-        }
-        apkFile.delete()
-        signedApk.renameTo(apkFile)
-    }
-
-    /**
-     * 构建 PKCS#7 SignedData — 使用 BouncyCastle CMSSignedDataGenerator
-     */
-    private fun buildPkcs7(keyPair: java.security.KeyPair, signature: ByteArray, data: ByteArray): ByteArray {
-        return try {
-            val cert = generateSelfSignedCert(keyPair)
-
-            val gen = org.bouncycastle.cms.CMSSignedDataGenerator()
-            
-            val signerInfoGen = org.bouncycastle.cms.SignerInfoGeneratorBuilder(
-                org.bouncycastle.operator.jcajce.JcaDigestCalculatorProviderBuilder()
-                    .setProvider("BC").build()
-            ).build(
-                org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withRSA")
-                    .setProvider("BC").build(keyPair.private),
-                cert
-            )
-            gen.addSignerInfoGenerator(signerInfoGen)
-
-            val certStore = org.bouncycastle.cert.jcajce.JcaCertStore(listOf(cert))
-            gen.addCertificates(certStore)
-
-            val msg = gen.generate(
-                org.bouncycastle.cms.CMSProcessableByteArray(data),
-                true
-            )
-            msg.encoded
-        } catch (e: Exception) {
-            Log.e(TAG, "PKCS#7 build failed: ${e.message}")
-            signature
-        }
-    }
-
-    /** 生成自签名 X.509 证书 — 使用 BouncyCastle */
-    private fun generateSelfSignedCert(keyPair: java.security.KeyPair): java.security.cert.X509Certificate {
-        val notBefore = java.util.Date()
-        val notAfter = java.util.Date(notBefore.time + 365L * 24 * 60 * 60 * 1000)
-
-        val builder = org.bouncycastle.cert.jcajce.JcaX509v3CertificateBuilder(
-            org.bouncycastle.asn1.x500.X500Name("CN=FridaMCP, OU=Dev, O=FridaMCP, C=US"),
-            java.math.BigInteger.valueOf(System.currentTimeMillis()),
-            notBefore,
-            notAfter,
-            org.bouncycastle.asn1.x500.X500Name("CN=FridaMCP, OU=Dev, O=FridaMCP, C=US"),
-            keyPair.public
-        )
-
-        val signer = org.bouncycastle.operator.jcajce.JcaContentSignerBuilder("SHA256withRSA")
-            .setProvider("BC").build(keyPair.private)
-        val holder = builder.build(signer)
-
-        return org.bouncycastle.cert.jcajce.JcaX509CertificateConverter()
-            .setProvider("BC").getCertificate(holder)
-    }
-
-    /**
-     * 通过 Shizuku/Root 使用 jarsigner (如果可用)
-     */
-    private fun signApkViaShell(apkFile: File): Boolean {
+        private fun signApkViaShell(apkFile: File): Boolean {
         return try {
             val apkPath = apkFile.absolutePath
             val result = ShizukuManager.execShell(
