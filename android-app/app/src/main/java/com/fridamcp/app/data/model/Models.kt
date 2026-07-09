@@ -106,14 +106,9 @@ data class MCPServerStatus(
 @Serializable
 data class MCPSession(
     val id: String,
-    val pid: Int,
-    val appName: String,
-    val packageName: String,
-    val state: String, // "created", "attached", "detached", "error"
+    val clientAddr: String,
+    val state: String, // "connected", "disconnected"
     val createdAt: Long,
-    val scriptCount: Int,
-    val hookCount: Int,
-    val messageCount: Int,
 )
 
 /** Injection task */

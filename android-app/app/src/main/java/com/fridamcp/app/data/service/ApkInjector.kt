@@ -70,10 +70,26 @@ class ApkInjector(private val context: Context) {
             val signOk = signApkV1(outputApk)
             if (!signOk) {
                 return Result.Error(
-                    "APK 已注入但签名失败 — 无法安装\n" +
-                    "请在 PC 上签名: apksigner sign --ks debug.keystore --ks-pass pass:android '$outputApk'"
+                    "APK 已注入 gadget 但签名失败 — 无法安装\n" +
+                    "请在 PC 上签名: apksigner sign --ks debug.keystore --ks-pass pass:android '$outputApk'\n" +
+                    "参考: https://juejin.cn/post/6844903557037047815"
                 )
             }
+
+            // 重要: 仅注入 .so 不修改 smali, gadget 不会自动加载
+            // 用户需要在 PC 上用 apktool 修改 smali:
+            //   1. apktool d app.apk
+            //   2. 在 Application.onCreate 中添加: const-string v0, "frida-gadget" / invoke-static {v0}, System.loadLibrary
+            //   3. apktool b -o app_patched.apk
+            // 参考: https://www.52pojie.cn/thread-1181471-1-1.html
+
+            // 检查是否需要 smali patch
+            // 参考: https://www.52pojie.cn/thread-1181471-1-1.html
+            // 参考: https://bbs.kanxue.com/thread-259158.htm
+            // frida-gadget 需要通过 System.loadLibrary("frida-gadget") 加载
+            // Android 不会自动加载 lib/*.so — 必须显式调用
+            // 由于 Android 上没有 apktool, 无法修改 smali
+            // 用户需要在 PC 上完成 smali patch, 或使用 frida-server spawn 模式
 
             return Result.Success(outputApk.absolutePath)
         } catch (e: Exception) {

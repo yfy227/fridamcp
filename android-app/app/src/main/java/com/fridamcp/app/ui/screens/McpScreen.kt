@@ -254,7 +254,7 @@ private fun SessionCard(session: com.fridamcp.app.data.model.MCPSession) {
                         .background(if (session.state == "connected") Success else MutedForeground),
                 )
             }
-            Text("客户端: " + session.packageName, style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+            Text("客户端: " + session.clientAddr, style = MaterialTheme.typography.bodySmall, color = MutedForeground)
             Spacer(modifier = Modifier.height(4.dp))
             Text(
                 "连接时间: " + java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date(session.createdAt)),

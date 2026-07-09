@@ -427,12 +427,28 @@ object ShizukuManager {
         } catch (e: Exception) { false }
     }
 
-    /** 获取 frida-server 版本 */
+    /** 获取 frida-server 版本 — 遍历已知路径
+     * frida-server 不在 PATH, 需要尝试常见安装路径
+     */
     fun getFridaVersion(): String? {
-        return try {
-            val result = execShell("frida-server --version 2>/dev/null || frida --version 2>/dev/null")
-            result.trim().ifBlank { null }
-        } catch (e: Exception) { null }
+        val fridaPaths = listOf(
+            "/data/local/tmp/frida-server",
+            "/data/local/tmp/frida-server-arm64",
+            "/data/local/tmp/frida-server-arm",
+            "/system/bin/frida-server",
+            "/system/xbin/frida-server"
+        )
+        for (path in fridaPaths) {
+            try {
+                val result = execShell("$path --version 2>/dev/null")
+                val trimmed = result.trim().split("\n")[0].trim()
+                // frida-server 版本格式: 16.5.9 或 16.5.9-android-arm64
+                if (trimmed.matches(Regex("""\d+\.\d+\.\d+.*"""))) {
+                    return trimmed
+                }
+            } catch (e: Exception) { continue }
+        }
+        return null
     }
 
     // ============================================================

@@ -408,12 +408,12 @@ class SharedViewModel(
                         mcpRepository.addLog(LogLevel.INFO, "ApkInjector", "注入完成: $appName → ${result.outputPath}")
                     }
                     is com.fridamcp.app.data.service.ApkInjector.Result.Error -> {
-                        mcpRepository.updateTask(task.id, 0, InjectionTaskStatus.ERROR)
+                        mcpRepository.updateTask(task.id, 0, InjectionTaskStatus.ERROR, error = result.message)
                         mcpRepository.addLog(LogLevel.ERROR, "ApkInjector", "注入失败: ${result.message}")
                     }
                 }
             } catch (e: Exception) {
-                mcpRepository.updateTask(task.id, 0, InjectionTaskStatus.ERROR)
+                mcpRepository.updateTask(task.id, 0, InjectionTaskStatus.ERROR, error = e.message)
                 mcpRepository.addLog(LogLevel.ERROR, "ApkInjector", "注入异常: ${e.message}")
             }
         }.start()

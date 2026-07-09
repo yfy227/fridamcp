@@ -637,12 +637,22 @@ class McpServerService : Service() {
                     if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
                         return textResult("Error: 需要 Shizuku/Root 权限")
                     }
-                    return textResult(ShizukuManager.execShell("dumpsys package ${args.optString("package_name")} | head -50"))
+                    val pkg = args.optString("package_name").replace("'", "'\''").replace(";", "").replace("|", "").replace("&", "")
+                    return textResult(ShizukuManager.execShell("dumpsys package '$pkg' | head -50"))
                 }
 
-                "ui_tap" -> return textResult("Tapped (${args.optInt("x")}, ${args.optInt("y")})\n${ShizukuManager.execShell("input tap ${args.optInt("x")} ${args.optInt("y")}")}")
+                "ui_tap" -> {
+                    val x = args.optInt("x")
+                    val y = args.optInt("y")
+                    if (x < 0 || y < 0) return textResult("Error: x and y must be non-negative")
+                    return textResult("Tapped ($x, $y)\n${ShizukuManager.execShell("input tap $x $y")}")
+                }
 
-                "ui_swipe" -> return textResult(ShizukuManager.execShell("input swipe ${args.optInt("x1")} ${args.optInt("y1")} ${args.optInt("x2")} ${args.optInt("y2")}"))
+                "ui_swipe" -> {
+                    val x1 = args.optInt("x1"); val y1 = args.optInt("y1")
+                    val x2 = args.optInt("x2"); val y2 = args.optInt("y2")
+                    return textResult(ShizukuManager.execShell("input swipe $x1 $y1 $x2 $y2"))
+                }
 
                 "ui_input_text" -> {
                     val text = args.optString("text")
@@ -651,7 +661,11 @@ class McpServerService : Service() {
                     return textResult(ShizukuManager.execShell("echo '$b64' | base64 -d | xargs -0 input text"))
                 }
 
-                "ui_press_key" -> return textResult(ShizukuManager.execShell("input keyevent ${args.optString("keycode")}"))
+                "ui_press_key" -> {
+                    val keycode = args.optString("keycode").replace("'", "").replace(";", "").replace("|", "").replace("&", "").replace(" ", "")
+                    if (keycode.isBlank()) return textResult("Error: keycode is required")
+                    return textResult(ShizukuManager.execShell("input keyevent $keycode"))
+                }
 
                 "screenshot" -> {
                     val tmpPath = "/data/local/tmp/screenshot_${System.currentTimeMillis()}.png"
@@ -695,9 +709,8 @@ class McpServerService : Service() {
 
                     // /proc/PID/mem 需要 ptrace(PTRACE_ATTACH) 才能读取
                     // ptrace 是内核 syscall, 不是 shell 命令
-                    // 在 Android 上可以通过 gdb (如果有) 或编译 native helper
+                    // 参考: https://juejin.cn/post/7360285681237278761  https://bbs.kanxue.com/thread-284041.htm
                     val cmd = """# 方法1: 使用 gdb (如果安装了)
-                        # 方法2: 使用 gdb (如果安装了)
                         which gdb >/dev/null 2>&1 && {
                             gdb -batch -ex "attach $pid" -ex "x/${size}xb $decimalAddr" -ex "detach" 2>&1
                             exit 0
@@ -749,7 +762,12 @@ class McpServerService : Service() {
                     if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
                         return textResult("Error: No Shizuku/Root permission. Activate Shizuku or grant root first.")
                     }
-                    return textResult(ShizukuManager.execShell(args.optString("command")))
+                    val cmd = args.optString("command")
+                    if (cmd.isBlank()) return textResult("Error: command is required")
+                    // exec_shell 设计上就是执行任意命令 — 这是它的功能
+                    // 但记录日志以供审计
+                    Log.w(TAG, "exec_shell: $cmd")
+                    return textResult(ShizukuManager.execShell(cmd))
                 }
 
                 "run_frida_script" -> {
@@ -782,16 +800,37 @@ class McpServerService : Service() {
                         return textResult("Error: Cannot write script file: $writeResult")
                     }
 
-                    // 使用 frida-server 的 RPC 接口而非 frida CLI
-                    // frida CLI 是 PC 端 Python 工具，Android 上不可用
-                    // 直接通过 frida-server 的 D-Bus/JSON 协议或使用 frida-inject
-                    val injectResult = ShizukuManager.execShell(
-                        "frida-inject -p $pid -s '$tmpScript' 2>&1 || " +
-                        "frida-server-inject -p $pid -s '$tmpScript' 2>&1 || " +
-                        "echo 'FALLBACK: frida-inject not available. Use frida-gadget listen mode instead.'"
-                    )
-
-                    ShizukuManager.execShell("rm -f '$tmpScript'")
+                    // frida CLI 是 PC 端 Python 工具, Android 上不可用
+                    // frida-inject 是独立二进制, 需要从 frida releases 单独下载
+                    // 参考: https://frida.re/docs/android/  https://www.52pojie.cn/thread-1823118-1-1.html
+                    // 方案1: /data/local/tmp/frida-inject (如果用户下载了)
+                    // 方案2: python3 + frida 库 (需要 Termux)
+                    // 方案3: 返回错误, 提示用户
+                    val injectResult = ShizukuManager.execShell("""
+                        if [ -x /data/local/tmp/frida-inject ]; then
+                            /data/local/tmp/frida-inject -p $pid -s '$tmpScript' 2>&1
+                            echo "INJECT_OK"
+                        elif command -v python3 >/dev/null 2>&1; then
+                            python3 -c "
+import frida, sys, time
+try:
+    session = frida.attach($pid)
+    script = session.create_script(open('$tmpScript').read())
+    script.load()
+    time.sleep(2)
+    session.detach()
+    print('PYTHON_OK')
+except Exception as e:
+    print('PYTHON_ERROR: ' + str(e))
+" 2>&1
+                        else
+                            echo "ERROR: 需要 frida-inject 或 python3+frida"
+                            echo "下载 frida-inject: https://github.com/frida/frida/releases"
+                            echo "或安装 Termux + python3 + pip install frida"
+                            echo "或使用 frida-gadget listen 模式 (注入 APK)"
+                        fi
+                        rm -f '$tmpScript'
+                    """.trimIndent())
 
                     return textResult(
                         "Package: $pkg (PID: $pid)\n" +

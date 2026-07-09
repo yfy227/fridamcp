@@ -137,14 +137,9 @@ class McpRepository(private val context: Context) {
     fun onSessionAdded(sessionId: String, clientAddr: String) {
         val session = MCPSession(
             id = sessionId,
-            pid = 0,
-            appName = clientAddr,
-            packageName = clientAddr,
+            clientAddr = clientAddr,
             state = "connected",
             createdAt = System.currentTimeMillis(),
-            scriptCount = 0,
-            hookCount = 0,
-            messageCount = 0,
         )
         _sessions.value = _sessions.value + session
         _serverStatus.value = _serverStatus.value.copy(
@@ -182,9 +177,14 @@ class McpRepository(private val context: Context) {
         return task
     }
 
-    fun updateTask(taskId: String, progress: Int, status: InjectionTaskStatus, outputApk: String? = null) {
+    fun updateTask(taskId: String, progress: Int, status: InjectionTaskStatus, outputApk: String? = null, error: String? = null) {
         _tasks.value = _tasks.value.map { t ->
-            if (t.id == taskId) t.copy(progress = progress, status = status, outputApk = outputApk ?: t.outputApk)
+            if (t.id == taskId) t.copy(
+                progress = progress,
+                status = status,
+                outputApk = outputApk ?: t.outputApk,
+                error = error ?: t.error,
+            )
             else t
         }
     }
