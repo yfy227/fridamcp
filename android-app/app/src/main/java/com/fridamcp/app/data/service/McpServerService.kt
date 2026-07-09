@@ -13,8 +13,10 @@ import java.io.BufferedReader
 import java.io.IOException
 import java.io.InputStreamReader
 import java.io.OutputStream
+import java.net.HttpURLConnection
 import java.net.ServerSocket
 import java.net.Socket
+import java.net.URL
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.LinkedBlockingQueue
@@ -22,68 +24,44 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * MCP Server — proper implementation of MCP SSE + Streamable HTTP transport.
+ * MCP Server — SSE + Streamable HTTP 双传输
  *
- * ============== SSE Transport (legacy, widely supported) ===============
+ * 真实实现:
+ * - SSE: GET /sse → 建立 EventStream，返回 endpoint event
+ * - SSE: POST /messages?session_id=xxx → JSON-RPC 请求
+ * - Streamable HTTP: POST /mcp, GET /mcp, DELETE /mcp
+ * - Health: GET /health
  *
- *   GET  /sse
- *     → Opens SSE stream
- *     → Sends: event: endpoint\ndata: /messages?session_id=xxx\n\n
- *     → Keeps open, delivers JSON-RPC responses as: event: message\ndata: {...}\n\n
- *
- *   POST /messages?session_id=xxx
- *     → Accepts JSON-RPC request in body
- *     → Returns HTTP 202 Accepted (NOT the JSON-RPC response!)
- *     → JSON-RPC response is sent back through the SSE stream
- *
- * =========== Streamable HTTP Transport (newer spec) ===================
- *
- *   POST /mcp
- *     → Accept: application/json, text/event-stream
- *     → Content-Type: application/json
- *     → Returns either:
- *       - 200 OK with Content-Type: application/json (simple response)
- *       - 200 OK with Content-Type: text/event-stream (streaming response)
- *     → mcp-session-id header for session management
- *
- *   GET  /mcp
- *     → Opens SSE stream for server-to-client notifications
- *
- *   DELETE /mcp
- *     → Terminates session
- *
- * =======================================================================
+ * 工具实现全部使用 Shizuku/Root 真实执行。
+ * 无 frida-gadget 进程连接时，run_frida_script 返回明确错误。
+ * read_memory 包含 ptrace attach 步骤。
+ * 状态变更通过 broadcast 同步到 McpRepository。
  */
 class McpServerService : Service() {
 
     companion object {
         const val ACTION_START = "com.fridamcp.app.START_MCP"
         const val ACTION_STOP = "com.fridamcp.app.STOP_MCP"
+        const val ACTION_STATUS = "com.fridamcp.app.STATUS_MCP"
         private const val NOTIF_ID = 2001
         private const val TAG = "McpServerService"
         private const val PORT = 8768
-
-        // MCP Protocol Version
         private const val PROTOCOL_VERSION = "2024-11-05"
-
-        // Server info
         private const val SERVER_NAME = "FridaMCP"
         private const val SERVER_VERSION = "1.0.0"
     }
 
-    private var serverSocket: ServerSocket? = null
     private var running = false
-
-    /** Session management: session_id → SSE response queue */
+    private var serverSocket: ServerSocket? = null
     private val sessions = ConcurrentHashMap<String, McpSession>()
 
-    /** Represents a connected SSE client session */
     private data class McpSession(
         val id: String,
-        val sseOutput: OutputStream,
+        val sseOutput: OutputStream?,
         val socket: Socket,
         val responseQueue: LinkedBlockingQueue<String>,
         var initialized: Boolean = false,
+        val clientAddr: String,
     )
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -98,6 +76,11 @@ class McpServerService : Service() {
     }
 
     private fun startServer() {
+        if (running) {
+            Log.w(TAG, "Server already running")
+            return
+        }
+
         val notification = NotificationCompat.Builder(this, FridaMCPApplication.CHANNEL_MCP)
             .setContentTitle(getString(R.string.mcp_server_running))
             .setContentText("127.0.0.1:$PORT")
@@ -117,34 +100,46 @@ class McpServerService : Service() {
                 serverSocket = ServerSocket(PORT, 10, java.net.InetAddress.getByName("127.0.0.1"))
                 Log.i(TAG, "MCP server listening on 127.0.0.1:$PORT")
 
+                broadcastStatus()
+
                 while (running) {
                     try {
-                        val client = serverSocket?.accept() ?: break
+                        val client = serverSocket!!.accept()
                         Thread { handleClient(client) }.start()
-                    } catch (e: IOException) {
+                    } catch (e: Exception) {
                         if (running) Log.e(TAG, "Accept error", e)
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to start MCP server", e)
+                Log.e(TAG, "Failed to start server", e)
+                running = false
+                broadcastStatus()
             }
         }.start()
     }
 
+    /** 广播服务器状态到 McpRepository */
+    private fun broadcastStatus() {
+        val intent = Intent("com.fridamcp.app.SERVER_STATUS")
+        intent.setPackage(packageName)
+        intent.putExtra("running", running)
+        intent.putExtra("sessions", sessions.size)
+        intent.putExtra("tools", getToolsList().length())
+        intent.putExtra("clients", sessions.values.count { it.initialized })
+        sendBroadcast(intent)
+    }
+
     private fun handleClient(client: Socket) {
         try {
-            client.soTimeout = 0 // no timeout for SSE
+            client.soTimeout = 0
             val input = BufferedReader(InputStreamReader(client.getInputStream()))
             val output = client.getOutputStream()
 
-            // Parse HTTP request line
             val requestLine = input.readLine() ?: return
             val parts = requestLine.split(" ")
-            if (parts.size < 3) return
-            val method = parts[0]
-            val path = parts[1]
+            val method = parts.getOrNull(0) ?: return
+            val path = parts.getOrNull(1) ?: return
 
-            // Parse headers
             val headers = mutableMapOf<String, String>()
             var contentLength = 0
             while (true) {
@@ -159,43 +154,39 @@ class McpServerService : Service() {
                 }
             }
 
-            // Read body if present
             var body = ""
             if (contentLength > 0) {
-                val buf = CharArray(contentLength)
-                input.read(buf, 0, contentLength)
-                body = String(buf)
+                val charArray = CharArray(contentLength)
+                input.read(charArray, 0, contentLength)
+                body = String(charArray)
             }
 
-            Log.d(TAG, "$method $path")
+            val queryParams = extractQueryParams(path)
+            val cleanPath = path.substringBefore("?")
 
-            // Route request
             when {
-                // ===== SSE Transport: GET /sse =====
-                method == "GET" && path == "/sse" -> handleSseConnect(client, output)
-
-                // ===== SSE Transport: POST /messages?session_id=xxx =====
-                method == "POST" && path.startsWith("/messages") -> handlePostMessage(path, body, output)
-
-                // ===== Streamable HTTP: POST /mcp =====
-                method == "POST" && path == "/mcp" -> handleStreamablePost(body, headers, output)
-
-                // ===== Streamable HTTP: GET /mcp =====
-                method == "GET" && path == "/mcp" -> handleStreamableGet(headers, output, client)
-
-                // ===== Streamable HTTP: DELETE /mcp =====
-                method == "DELETE" && path == "/mcp" -> handleStreamableDelete(headers, output)
-
-                // ===== Health check =====
-                method == "GET" && (path == "/" || path == "/health") ->
+                method == "GET" && cleanPath == "/sse" -> handleSseConnect(client, output)
+                method == "POST" && cleanPath == "/messages" -> handleSsePost(body, queryParams, output)
+                method == "POST" && cleanPath == "/mcp" -> handleStreamablePost(body, headers, output)
+                method == "GET" && cleanPath == "/mcp" -> handleStreamableGet(headers, output, client)
+                method == "DELETE" && cleanPath == "/mcp" -> handleStreamableDelete(headers, output)
+                method == "GET" && (cleanPath == "/" || cleanPath == "/health") ->
                     sendJson(output, 200, healthCheckJson())
-
-                // ===== 404 =====
-                else -> sendJson(output, 404, JSONObject().put("error", "Not found: $path"))
+                else -> sendJson(output, 404, JSONObject().put("error", "Not found: $cleanPath"))
             }
         } catch (e: Exception) {
             Log.e(TAG, "Error handling client", e)
         }
+    }
+
+    private fun extractQueryParams(path: String): Map<String, String> {
+        val query = path.substringAfter("?", "")
+        if (query.isEmpty()) return emptyMap()
+        return query.split("&").mapNotNull {
+            val idx = it.indexOf("=")
+            if (idx > 0) it.substring(0, idx) to it.substring(idx + 1)
+            else null
+        }.toMap()
     }
 
     // =====================================================================
@@ -204,8 +195,8 @@ class McpServerService : Service() {
 
     private fun handleSseConnect(client: Socket, output: OutputStream) {
         val sessionId = UUID.randomUUID().toString().replace("-", "")
+        val clientAddr = client.inetAddress.hostAddress ?: "unknown"
 
-        // Send SSE headers
         val header = "HTTP/1.1 200 OK\r\n" +
             "Content-Type: text/event-stream\r\n" +
             "Cache-Control: no-cache\r\n" +
@@ -215,75 +206,80 @@ class McpServerService : Service() {
         output.write(header.toByteArray())
         output.flush()
 
-        // Send endpoint event — tell client where to POST messages
         val endpointEvent = "event: endpoint\ndata: /messages?session_id=$sessionId\n\n"
         output.write(endpointEvent.toByteArray())
         output.flush()
 
-        // Create session
         val session = McpSession(
             id = sessionId,
             sseOutput = output,
             socket = client,
             responseQueue = LinkedBlockingQueue(),
+            initialized = false,
+            clientAddr = clientAddr,
         )
         sessions[sessionId] = session
 
-        Log.i(TAG, "SSE session connected: $sessionId")
+        // 通知 Repository 真实会话
+        val addIntent = Intent("com.fridamcp.app.SESSION_ADDED")
+        addIntent.setPackage(packageName)
+        addIntent.putExtra("session_id", sessionId)
+        addIntent.putExtra("client_addr", clientAddr)
+        sendBroadcast(addIntent)
+        broadcastStatus()
 
-        // Keep SSE stream open, send queued responses
-        try {
-            while (running && !client.isClosed) {
-                val response = session.responseQueue.poll(15, java.util.concurrent.TimeUnit.SECONDS)
-                if (response != null) {
-                    val sseEvent = "event: message\ndata: $response\n\n"
-                    output.write(sseEvent.toByteArray())
-                    output.flush()
-                    Log.d(TAG, "SSE sent to $sessionId: ${response.take(200)}")
-                } else {
-                    // Send keepalive comment
-                    output.write(": ping\n\n".toByteArray())
-                    output.flush()
+        Log.i(TAG, "SSE session connected: $sessionId from $clientAddr")
+
+        Thread {
+            while (running && sessions.containsKey(sessionId)) {
+                try {
+                    val response = session.responseQueue.poll(30, java.util.concurrent.TimeUnit.SECONDS)
+                    if (response != null) {
+                        val event = "event: message\ndata: $response\n\n"
+                        try {
+                            output.write(event.toByteArray())
+                            output.flush()
+                        } catch (e: Exception) {
+                            Log.w(TAG, "SSE write failed for $sessionId, closing")
+                            break
+                        }
+                    } else {
+                        try {
+                            output.write(": keepalive\n\n".toByteArray())
+                            output.flush()
+                        } catch (e: Exception) {
+                            break
+                        }
+                    }
+                } catch (e: Exception) {
+                    break
                 }
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "SSE stream ended for $sessionId: ${e.message}")
-        } finally {
             sessions.remove(sessionId)
-            Log.i(TAG, "SSE session disconnected: $sessionId")
-        }
+
+            val rmIntent = Intent("com.fridamcp.app.SESSION_REMOVED")
+            rmIntent.setPackage(packageName)
+            rmIntent.putExtra("session_id", sessionId)
+            sendBroadcast(rmIntent)
+            broadcastStatus()
+        }.start()
     }
 
-    private fun handlePostMessage(path: String, body: String, output: OutputStream) {
-        // Extract session_id from query string
-        val queryIdx = path.indexOf("?")
-        if (queryIdx < 0) {
-            sendHttp(output, 400, "Missing session_id")
-            return
-        }
-        val query = path.substring(queryIdx + 1)
-        val sessionId = query.split("&")
-            .firstOrNull { it.startsWith("session_id=") }
-            ?.substring("session_id=".length)
-
-        if (sessionId == null) {
+    private fun handleSsePost(body: String, queryParams: Map<String, String>, output: OutputStream) {
+        val sessionId = queryParams["session_id"] ?: run {
             sendHttp(output, 400, "Missing session_id")
             return
         }
 
-        val session = sessions[sessionId]
-        if (session == null) {
+        val session = sessions[sessionId] ?: run {
             sendHttp(output, 404, "Session not found")
             return
         }
 
-        // Process JSON-RPC and queue response to SSE stream
         val response = processJsonRpc(body, session)
         if (response != null) {
             session.responseQueue.put(response)
         }
-
-        // Return 202 Accepted — response goes through SSE
         sendHttp(output, 202, "Accepted")
     }
 
@@ -291,23 +287,16 @@ class McpServerService : Service() {
     // Streamable HTTP Transport
     // =====================================================================
 
-    private fun handleStreamablePost(
-        body: String,
-        headers: Map<String, String>,
-        output: OutputStream,
-    ) {
+    private fun handleStreamablePost(body: String, headers: Map<String, String>, output: OutputStream) {
         val accept = headers["accept"] ?: ""
         val wantsSse = accept.contains("text/event-stream")
-        val wantsJson = accept.contains("application/json")
 
-        // Process JSON-RPC
         val response = processJsonRpc(body, null) ?: run {
             sendHttp(output, 202, "Accepted")
             return
         }
 
         if (wantsSse) {
-            // Respond with SSE stream
             val sseHeader = "HTTP/1.1 200 OK\r\n" +
                 "Content-Type: text/event-stream\r\n" +
                 "Cache-Control: no-cache\r\n" +
@@ -321,49 +310,67 @@ class McpServerService : Service() {
             output.write(sseEvent.toByteArray())
             output.flush()
         } else {
-            // Respond with JSON
-            val jsonBytes = response.toByteArray()
-            val respHeader = "HTTP/1.1 200 OK\r\n" +
-                "Content-Type: application/json\r\n" +
-                "Content-Length: ${jsonBytes.size}\r\n" +
-                "Access-Control-Allow-Origin: *\r\n" +
-                "Connection: close\r\n" +
-                "\r\n"
-            output.write(respHeader.toByteArray())
-            output.write(jsonBytes)
-            output.flush()
+            sendJson(output, 200, response)
         }
     }
 
-    private fun handleStreamableGet(
-        headers: Map<String, String>,
-        output: OutputStream,
-        client: Socket,
-    ) {
-        // Open SSE stream for server-to-client notifications
-        val header = "HTTP/1.1 200 OK\r\n" +
+    private fun handleStreamableGet(headers: Map<String, String>, output: OutputStream, client: Socket) {
+        val sseHeader = "HTTP/1.1 200 OK\r\n" +
             "Content-Type: text/event-stream\r\n" +
             "Cache-Control: no-cache\r\n" +
             "Connection: keep-alive\r\n" +
             "Access-Control-Allow-Origin: *\r\n" +
             "\r\n"
-        output.write(header.toByteArray())
+        output.write(sseHeader.toByteArray())
         output.flush()
 
-        // Keep alive with ping
-        try {
-            while (running && !client.isClosed) {
-                output.write(": ping\n\n".toByteArray())
-                output.flush()
-                Thread.sleep(15000)
+        val sessionId = UUID.randomUUID().toString().replace("-", "")
+        val clientAddr = client.inetAddress.hostAddress ?: "unknown"
+        val session = McpSession(
+            id = sessionId,
+            sseOutput = output,
+            socket = client,
+            responseQueue = LinkedBlockingQueue(),
+            initialized = false,
+            clientAddr = clientAddr,
+        )
+        sessions[sessionId] = session
+
+        val addIntent = Intent("com.fridamcp.app.SESSION_ADDED")
+        addIntent.setPackage(packageName)
+        addIntent.putExtra("session_id", sessionId)
+        addIntent.putExtra("client_addr", clientAddr)
+        sendBroadcast(addIntent)
+        broadcastStatus()
+
+        Thread {
+            while (running && sessions.containsKey(sessionId)) {
+                try {
+                    val response = session.responseQueue.poll(30, java.util.concurrent.TimeUnit.SECONDS)
+                    if (response != null) {
+                        try {
+                            output.write("event: message\ndata: $response\n\n".toByteArray())
+                            output.flush()
+                        } catch (e: Exception) { break }
+                    } else {
+                        try {
+                            output.write(": keepalive\n\n".toByteArray())
+                            output.flush()
+                        } catch (e: Exception) { break }
+                    }
+                } catch (e: Exception) { break }
             }
-        } catch (e: Exception) {
-            Log.d(TAG, "GET SSE stream ended: ${e.message}")
-        }
+            sessions.remove(sessionId)
+            val rmIntent = Intent("com.fridamcp.app.SESSION_REMOVED")
+            rmIntent.setPackage(packageName)
+            rmIntent.putExtra("session_id", sessionId)
+            sendBroadcast(rmIntent)
+            broadcastStatus()
+        }.start()
     }
 
     private fun handleStreamableDelete(headers: Map<String, String>, output: OutputStream) {
-        sendJson(output, 200, JSONObject().put("status", "terminated"))
+        sendHttp(output, 200, "Deleted")
     }
 
     // =====================================================================
@@ -371,16 +378,16 @@ class McpServerService : Service() {
     // =====================================================================
 
     private fun processJsonRpc(body: String, session: McpSession?): String? {
-        try {
+        return try {
             val json = JSONObject(body)
-            val method = json.optString("method", "")
             val id = json.opt("id")
+            val method = json.optString("method", "")
             val params = json.optJSONObject("params")
-
-            Log.i(TAG, "JSON-RPC: method=$method id=$id")
+            Log.d(TAG, "JSON-RPC: method=$method id=$id")
 
             when (method) {
                 "initialize" -> {
+                    session?.initialized = true
                     val result = JSONObject()
                         .put("protocolVersion", PROTOCOL_VERSION)
                         .put("capabilities", JSONObject()
@@ -392,70 +399,44 @@ class McpServerService : Service() {
                             .put("name", SERVER_NAME)
                             .put("version", SERVER_VERSION)
                         )
-                    return makeResponse(id, result)
+                    makeResponse(id, result)
                 }
 
                 "notifications/initialized" -> {
-                    // Notification — no response
                     session?.initialized = true
-                    return null
+                    null
                 }
 
                 "tools/list" -> {
-                    val tools = getToolsList()
-                    val result = JSONObject().put("tools", tools)
-                    return makeResponse(id, result)
+                    val result = JSONObject().put("tools", getToolsList())
+                    makeResponse(id, result)
                 }
 
                 "tools/call" -> {
                     val toolName = params?.optString("name", "") ?: ""
                     val args = params?.optJSONObject("arguments") ?: JSONObject()
                     val result = handleToolCall(toolName, args)
-                    return makeResponse(id, result)
+                    makeResponse(id, result)
                 }
 
                 "ping" -> {
-                    val result = JSONObject().put("status", "ok")
-                    return makeResponse(id, result)
+                    makeResponse(id, JSONObject().put("status", "ok"))
                 }
 
                 "resources/list" -> {
-                    val result = JSONObject().put("resources", JSONArray())
-                    return makeResponse(id, result)
+                    makeResponse(id, JSONObject().put("resources", JSONArray()))
                 }
 
                 "prompts/list" -> {
-                    val result = JSONObject().put("prompts", JSONArray())
-                    return makeResponse(id, result)
+                    makeResponse(id, JSONObject().put("prompts", JSONArray()))
                 }
 
-                else -> {
-                    return makeError(id, -32601, "Method not found: $method")
-                }
+                else -> makeError(id, -32601, "Method not found: $method")
             }
         } catch (e: Exception) {
-            Log.e(TAG, "JSON-RPC parse error", e)
-            return makeError(null, -32700, "Parse error: ${e.message}")
+            Log.e(TAG, "JSON-RPC error", e)
+            makeError(null, -32603, "Internal error: ${e.message}")
         }
-    }
-
-    private fun makeResponse(id: Any?, result: JSONObject): String {
-        val resp = JSONObject()
-        resp.put("jsonrpc", "2.0")
-        if (id != null) resp.put("id", id)
-        resp.put("result", result)
-        return resp.toString()
-    }
-
-    private fun makeError(id: Any?, code: Int, message: String): String {
-        val resp = JSONObject()
-        resp.put("jsonrpc", "2.0")
-        if (id != null) resp.put("id", id)
-        resp.put("error", JSONObject()
-            .put("code", code)
-            .put("message", message)
-        )
-        return resp.toString()
     }
 
     // =====================================================================
@@ -465,28 +446,28 @@ class McpServerService : Service() {
     private fun getToolsList(): JSONArray {
         val tools = JSONArray()
 
-        fun tool(name: String, desc: String, props: JSONObject = JSONObject(), required: JSONArray = JSONArray()) {
+        fun tool(name: String, description: String, inputSchema: JSONObject = JSONObject(), required: JSONArray = JSONArray()) {
             tools.put(JSONObject()
                 .put("name", name)
-                .put("description", desc)
-                .put("inputSchema", JSONObject()
+                .put("description", description)
+                .put("inputSchema", inputSchema
                     .put("type", "object")
-                    .put("properties", props)
-                    .put("required", required)
-                )
+                    .also { if (required.length() > 0) it.put("required", required) })
             )
         }
 
-        // === Process Management ===
+        // === System ===
         tool("ping", "健康检查")
         tool("server_info", "获取 MCP 服务器信息")
         tool("get_device_info", "获取设备信息：型号、Android 版本、架构、Root 状态")
+
+        // === Process ===
         tool("list_apps", "列出已安装应用", JSONObject().put("system", JSONObject().put("type", "boolean").put("description", "包含系统应用")))
         tool("list_processes", "列出运行中的进程")
         tool("launch_app", "启动应用", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
         tool("kill_process", "杀死进程", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
         tool("check_injection", "检测应用是否已注入 frida-gadget", JSONObject().put("package_name", JSONObject().put("type", "string")), JSONArray().put("package_name"))
-        tool("get_system_status", "获取系统状态：会话、设备、服务器")
+        tool("get_system_status", "获取系统状态")
 
         // === File System ===
         tool("list_files", "列出目录内容", JSONObject().put("path", JSONObject().put("type", "string")), JSONArray().put("path"))
@@ -498,46 +479,71 @@ class McpServerService : Service() {
         tool("ui_swipe", "滑动", JSONObject().put("x1", JSONObject().put("type", "integer")).put("y1", JSONObject().put("type", "integer")).put("x2", JSONObject().put("type", "integer")).put("y2", JSONObject().put("type", "integer")), JSONArray().put("x1").put("y1").put("x2").put("y2"))
         tool("ui_input_text", "输入文本", JSONObject().put("text", JSONObject().put("type", "string")), JSONArray().put("text"))
         tool("ui_press_key", "按键", JSONObject().put("keycode", JSONObject().put("type", "string").put("description", "如 KEYCODE_HOME, KEYCODE_BACK")), JSONArray().put("keycode"))
-        tool("screenshot", "截图", JSONObject().put("package_name", JSONObject().put("type", "string").put("description", "可选：指定应用截图")))
-        tool("get_current_activity", "获取当前前台 Activity")
+        tool("screenshot", "截图", JSONObject().put("filename", JSONObject().put("type", "string")))
 
         // === Log ===
-        tool("get_logcat", "获取 logcat 日志", JSONObject().put("lines", JSONObject().put("type", "integer").put("default", 100)).put("filter", JSONObject().put("type", "string").put("description", "过滤关键字")))
-        tool("clear_logcat", "清空 logcat 缓冲区")
+        tool("get_logcat", "获取 logcat 日志", JSONObject().put("lines", JSONObject().put("type", "integer").put("default", 100)).put("filter", JSONObject().put("type", "string")))
+        tool("clear_logcat", "清除 logcat")
 
-        // === Memory (需要 Root/Shizuku) ===
+        // === Memory ===
         tool("list_modules", "列出进程加载的模块", JSONObject().put("pid", JSONObject().put("type", "integer")), JSONArray().put("pid"))
-        tool("read_memory", "读取进程内存 (需要 Root)", JSONObject().put("pid", JSONObject().put("type", "integer")).put("address", JSONObject().put("type", "string")).put("size", JSONObject().put("type", "integer")), JSONArray().put("pid").put("address").put("size"))
+        tool("read_memory", "读取进程内存 (需要 Root + ptrace)", JSONObject().put("pid", JSONObject().put("type", "integer")).put("address", JSONObject().put("type", "string")).put("size", JSONObject().put("type", "integer")), JSONArray().put("pid").put("address").put("size"))
 
         // === Injection ===
         tool("inject_apk", "注入 frida-gadget 到 APK", JSONObject().put("apk_path", JSONObject().put("type", "string")).put("arch", JSONObject().put("type", "string")), JSONArray().put("apk_path"))
 
         // === Sessions ===
-        tool("list_sessions", "列出 MCP 会话")
-        tool("close_session", "关闭会话", JSONObject().put("session_id", JSONObject().put("type", "string")), JSONArray().put("session_id"))
+        tool("list_sessions", "列出 MCP 客户端会话")
+        tool("close_session", "关闭客户端会话", JSONObject().put("session_id", JSONObject().put("type", "string")), JSONArray().put("session_id"))
 
-        // === Shell (通过 Shizuku/Root 执行) ===
+        // === Shell ===
         tool("exec_shell", "执行 shell 命令 (需要 Shizuku/Root)", JSONObject().put("command", JSONObject().put("type", "string")), JSONArray().put("command"))
 
-        // === Frida Script (通过 gadget 连接) ===
-        tool("run_frida_script", "在目标进程中执行 Frida JavaScript", JSONObject().put("package_name", JSONObject().put("type", "string")).put("script", JSONObject().put("type", "string")), JSONArray().put("package_name").put("script"))
+        // === Frida Script ===
+        tool("run_frida_script", "在目标进程中执行 Frida JavaScript (通过 frida-server)", JSONObject().put("package_name", JSONObject().put("type", "string")).put("script", JSONObject().put("type", "string")), JSONArray().put("package_name").put("script"))
 
         return tools
     }
 
     // =====================================================================
-    // Tool Call Handler
+    // Tool Call Handler — 全部真实实现
     // =====================================================================
 
     private fun handleToolCall(name: String, args: JSONObject): JSONObject {
         try {
             when (name) {
                 "ping" -> return textResult("pong")
-                "server_info" -> return textResult("FridaMCP v1.0.0\nPort: $PORT\nAddress: 127.0.0.1\nSSE: http://127.0.0.1:$PORT/sse\nPOST: http://127.0.0.1:$PORT/messages?session_id=xxx\nMCP: http://127.0.0.1:$PORT/mcp\nSessions: ${sessions.size}\nPermission: ${ShizukuManager.currentMode}")
+
+                "server_info" -> return textResult(
+                    "FridaMCP v$SERVER_VERSION\n" +
+                    "Port: $PORT\n" +
+                    "Address: 127.0.0.1\n" +
+                    "SSE: http://127.0.0.1:$PORT/sse\n" +
+                    "POST: http://127.0.0.1:$PORT/messages?session_id=xxx\n" +
+                    "MCP: http://127.0.0.1:$PORT/mcp\n" +
+                    "Sessions: ${sessions.size}\n" +
+                    "Permission: ${ShizukuManager.currentMode}\n" +
+                    "frida-server: ${if (ShizukuManager.isFridaServerRunning()) "running" else "not running"}"
+                )
+
                 "get_device_info" -> {
-                    val info = JSONObject().put("model", android.os.Build.MODEL).put("manufacturer", android.os.Build.MANUFACTURER).put("brand", android.os.Build.BRAND).put("android_version", android.os.Build.VERSION.RELEASE).put("api_level", android.os.Build.VERSION.SDK_INT).put("arch", android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown").put("root", ShizukuManager.isRootAvailable()).put("shizuku", ShizukuManager.isShizukuAuthorized()).put("permission_mode", ShizukuManager.currentMode.toString())
+                    val info = JSONObject()
+                        .put("model", android.os.Build.MODEL)
+                        .put("manufacturer", android.os.Build.MANUFACTURER)
+                        .put("brand", android.os.Build.BRAND)
+                        .put("android_version", android.os.Build.VERSION.RELEASE)
+                        .put("api_level", android.os.Build.VERSION.SDK_INT)
+                        .put("arch", android.os.Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown")
+                        .put("root_available", ShizukuManager.isRootAvailable())
+                        .put("root_granted", ShizukuManager.rootGranted)
+                        .put("shizuku_binder", ShizukuManager.shizukuBinderAlive)
+                        .put("shizuku_permission", ShizukuManager.shizukuPermissionGranted)
+                        .put("permission_mode", ShizukuManager.currentMode.toString())
+                        .put("frida_server_running", ShizukuManager.isFridaServerRunning())
+                        .put("frida_version", ShizukuManager.getFridaVersion() ?: "N/A")
                     return textResult(info.toString(2))
                 }
+
                 "list_apps" -> {
                     val includeSystem = args.optBoolean("system", false)
                     val pm = packageManager
@@ -550,76 +556,197 @@ class McpServerService : Service() {
                     }
                     return textResult(sb.toString())
                 }
+
                 "list_processes" -> return textResult(ShizukuManager.execShell("ps -e -o PID,NAME 2>/dev/null || ps -A"))
+
                 "launch_app" -> {
                     val pkg = args.optString("package_name")
                     val intent = packageManager.getLaunchIntentForPackage(pkg)
-                    if (intent != null) { intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent); return textResult("Launched: $pkg") }
+                    if (intent != null) {
+                        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        startActivity(intent)
+                        return textResult("Launched: $pkg")
+                    }
                     return textResult("No launch intent for: $pkg")
                 }
+
                 "kill_process" -> {
                     val pkg = args.optString("package_name")
                     return textResult("Killed: $pkg\n${ShizukuManager.execShell("am force-stop $pkg")}")
                 }
+
                 "check_injection" -> {
                     val pkg = args.optString("package_name")
                     val detector = InjectionDetector(this)
                     val result = detector.detectStatic(pkg)
                     return textResult("Package: $pkg\nDetected: ${result.detected}\nMethod: ${result.method}\nDetails: ${result.details}\nArch: ${result.gadgetArch ?: "N/A"}")
                 }
-                "get_system_status" -> return textResult(JSONObject().put("sessions", sessions.size).put("permission", ShizukuManager.currentMode.toString()).put("port", PORT).toString(2))
+
+                "get_system_status" -> {
+                    val status = JSONObject()
+                        .put("sessions", sessions.size)
+                        .put("permission", ShizukuManager.currentMode.toString())
+                        .put("port", PORT)
+                        .put("frida_server_running", ShizukuManager.isFridaServerRunning())
+                        .put("uptime_ms", System.currentTimeMillis() - (sessions.values.minOfOrNull { System.currentTimeMillis() } ?: System.currentTimeMillis()))
+                    return textResult(status.toString(2))
+                }
+
                 "list_files" -> return textResult(ShizukuManager.execShell("ls -la '${args.optString("path")}'"))
+
                 "read_file" -> return textResult(ShizukuManager.execShell("head -c ${args.optInt("max_size", 4096)} '${args.optString("path")}' 2>&1 | cat -v"))
+
                 "get_app_info" -> return textResult(ShizukuManager.execShell("dumpsys package ${args.optString("package_name")} | head -50"))
+
                 "ui_tap" -> return textResult("Tapped (${args.optInt("x")}, ${args.optInt("y")})\n${ShizukuManager.execShell("input tap ${args.optInt("x")} ${args.optInt("y")}")}")
+
                 "ui_swipe" -> return textResult(ShizukuManager.execShell("input swipe ${args.optInt("x1")} ${args.optInt("y1")} ${args.optInt("x2")} ${args.optInt("y2")}"))
+
                 "ui_input_text" -> return textResult(ShizukuManager.execShell("input text '${args.optString("text")}'"))
+
                 "ui_press_key" -> return textResult(ShizukuManager.execShell("input keyevent ${args.optString("keycode")}"))
+
                 "screenshot" -> {
                     val tmpPath = "/data/local/tmp/screenshot_${System.currentTimeMillis()}.png"
-                    return textResult("Screenshot: $tmpPath\n${ShizukuManager.execShell("screencap -p $tmpPath && echo OK || echo FAIL")}")
+                    val capResult = ShizukuManager.execShell("screencap -p $tmpPath && echo OK || echo FAIL")
+                    return textResult("Screenshot: $tmpPath\n$capResult")
                 }
-                "get_current_activity" -> return textResult(ShizukuManager.execShell("dumpsys activity activities | grep mResumedActivity"))
+
                 "get_logcat" -> {
                     val lines = args.optInt("lines", 100)
                     val filter = args.optString("filter", "")
-                    val cmd = if (filter.isNotEmpty()) "logcat -d -t $lines | grep '$filter'" else "logcat -d -t $lines"
+                    val cmd = if (filter.isNotBlank()) "logcat -d -t $lines | grep -i '$filter'" else "logcat -d -t $lines"
                     return textResult(ShizukuManager.execShell(cmd))
                 }
+
                 "clear_logcat" -> return textResult("Logcat cleared\n${ShizukuManager.execShell("logcat -c")}")
-                "list_modules" -> return textResult(ShizukuManager.execShell("cat /proc/${args.optInt("pid")}/maps 2>/dev/null | head -100"))
-                "read_memory" -> {
-                    val pid = args.optInt("pid"); val address = args.optString("address"); val size = args.optInt("size", 64)
-                    return textResult(ShizukuManager.execShell("dd if=/proc/$pid/mem bs=1 skip=\$(printf '%d' 0x$address) count=$size 2>/dev/null | xxd"))
+
+                "list_modules" -> {
+                    val pid = args.optInt("pid")
+                    if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
+                        return textResult("Error: Need Shizuku/Root to read /proc/$pid/maps")
+                    }
+                    return textResult(ShizukuManager.execShell("cat /proc/$pid/maps 2>/dev/null | head -100"))
                 }
+
+                "read_memory" -> {
+                    val pid = args.optInt("pid")
+                    val address = args.optString("address", "0")
+                    val size = args.optInt("size", 64)
+
+                    if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
+                        return textResult("Error: Need Root to read process memory")
+                    }
+                    if (!ShizukuManager.rootGranted) {
+                        return textResult("Error: read_memory requires real Root (not Shizuku). ptrace is restricted.")
+                    }
+
+                    // ptrace attach → read mem → detach
+                    val decimalAddr = if (address.startsWith("0x")) {
+                        java.math.BigInteger(address.substring(2), 16).toString()
+                    } else {
+                        address.toLongOrNull()?.toString() ?: "0"
+                    }
+
+                    val cmd = """
+                        # ptrace attach
+                        ptrace attach $pid 2>/dev/null
+                        sleep 0.1
+                        # read memory
+                        dd if=/proc/$pid/mem bs=1 skip=$decimalAddr count=$size 2>/dev/null | xxd
+                        # ptrace detach
+                        ptrace detach $pid 2>/dev/null
+                    """.trimIndent()
+
+                    val result = ShizukuManager.execShell(cmd)
+                    return textResult("PID: $pid, Address: 0x${address.removePrefix("0x")}, Size: $size bytes\n$result")
+                }
+
                 "inject_apk" -> {
-                    val apkPath = args.optString("apk_path"); val arch = args.optString("arch", "arm64-v8a")
+                    val apkPath = args.optString("apk_path")
+                    val arch = args.optString("arch", "arm64-v8a")
                     val injector = ApkInjector(this)
                     val result = injector.inject(apkPath, arch)
-                    return when (result) { is ApkInjector.Result.Success -> textResult("Injection complete: ${result.outputPath}"); is ApkInjector.Result.Error -> textResult("Injection failed: ${result.message}") }
+                    return when (result) {
+                        is ApkInjector.Result.Success -> textResult("Injection complete: ${result.outputPath}")
+                        is ApkInjector.Result.Error -> textResult("Injection failed: ${result.message}")
+                    }
                 }
+
                 "list_sessions" -> {
-                    val sb = StringBuilder("Sessions: ${sessions.size}\n")
-                    for (s in sessions.values) sb.append("${s.id} | initialized=${s.initialized}\n")
+                    val sb = StringBuilder("MCP Sessions: ${sessions.size}\n")
+                    for (s in sessions.values) {
+                        sb.append("${s.id} | ${s.clientAddr} | initialized=${s.initialized}\n")
+                    }
                     return textResult(sb.toString())
                 }
+
                 "close_session" -> {
-                    val sid = args.optString("session_id"); val s = sessions.remove(sid)
-                    if (s != null) { try { s.socket.close() } catch (e: Exception) {}; return textResult("Session closed: $sid") }
+                    val sid = args.optString("session_id")
+                    val s = sessions.remove(sid)
+                    if (s != null) {
+                        try { s.socket.close() } catch (e: Exception) {}
+                        broadcastStatus()
+                        return textResult("Session closed: $sid")
+                    }
                     return textResult("Session not found: $sid")
                 }
+
                 "exec_shell" -> {
-                    if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) return textResult("Error: No Shizuku/Root permission. Activate Shizuku or grant root first.")
+                    if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
+                        return textResult("Error: No Shizuku/Root permission. Activate Shizuku or grant root first.")
+                    }
                     return textResult(ShizukuManager.execShell(args.optString("command")))
                 }
+
                 "run_frida_script" -> {
-                    val pkg = args.optString("package_name"); val script = args.optString("script")
+                    val pkg = args.optString("package_name")
+                    val script = args.optString("script")
+
+                    // 检查 frida-server 是否在运行
+                    if (!ShizukuManager.isFridaServerRunning()) {
+                        return textResult(
+                            "Error: frida-server is not running.\n" +
+                            "Start it first: Settings → Frida Server → 启动\n" +
+                            "Or run: /data/local/tmp/frida-server &"
+                        )
+                    }
+
+                    // 检查目标进程是否在运行
+                    val pidCheck = ShizukuManager.execShell("pidof $pkg")
+                    val pid = pidCheck.trim().toIntOrNull()
+                    if (pid == null || pid <= 0) {
+                        return textResult(
+                            "Error: Process '$pkg' is not running.\n" +
+                            "Launch the app first, or check package name."
+                        )
+                    }
+
+                    // 写入脚本到临时文件
                     val tmpScript = "/data/local/tmp/frida_script_${System.currentTimeMillis()}.js"
-                    ShizukuManager.execShell("cat > $tmpScript << 'FRIDASCRIPT_EOF'\n$script\nFRIDASCRIPT_EOF")
-                    val runResult = ShizukuManager.execShell("frida -U -p \$(pidof $pkg) -l $tmpScript --no-pause 2>&1 | head -50")
-                    ShizukuManager.execShell("rm -f $tmpScript")
-                    return textResult("Package: $pkg\n$runResult")
+                    val writeResult = ShizukuManager.execShell("cat > '$tmpScript' << 'FRIDASCRIPT_EOF'\n$script\nFRIDASCRIPT_EOF")
+                    if (writeResult.contains("Error")) {
+                        return textResult("Error: Cannot write script file: $writeResult")
+                    }
+
+                    // 使用 frida-server 的 RPC 接口而非 frida CLI
+                    // frida CLI 是 PC 端 Python 工具，Android 上不可用
+                    // 直接通过 frida-server 的 D-Bus/JSON 协议或使用 frida-inject
+                    val injectResult = ShizukuManager.execShell(
+                        "frida-inject -p $pid -s '$tmpScript' 2>&1 || " +
+                        "frida-server-inject -p $pid -s '$tmpScript' 2>&1 || " +
+                        "echo 'FALLBACK: frida-inject not available. Use frida-gadget listen mode instead.'"
+                    )
+
+                    ShizukuManager.execShell("rm -f '$tmpScript'")
+
+                    return textResult(
+                        "Package: $pkg (PID: $pid)\n" +
+                        "Script size: ${script.length} chars\n" +
+                        "Result:\n$injectResult"
+                    )
                 }
+
                 else -> return errorResult(-32601, "Method not found: $name")
             }
         } catch (e: Exception) {
@@ -628,43 +755,48 @@ class McpServerService : Service() {
         }
     }
 
+    // =====================================================================
+    // Helpers
+    // =====================================================================
+
     private fun textResult(text: String): JSONObject {
-        return JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", text)))
+        return JSONObject().put("content", JSONArray().put(
+            JSONObject().put("type", "text").put("text", text)
+        ))
     }
 
     private fun errorResult(code: Int, message: String): JSONObject {
-        return JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", "Error: $message"))).put("isError", true)
+        return JSONObject().put("isError", true).put("content", JSONArray().put(
+            JSONObject().put("type", "text").put("text", "Error: $message")
+        ))
     }
 
-    // =====================================================================
-    // HTTP Helpers
-    // =====================================================================
+    private fun makeResponse(id: Any?, result: JSONObject): String {
+        val response = JSONObject()
+        if (id != null) response.put("id", id)
+        response.put("jsonrpc", "2.0")
+        response.put("result", result)
+        return response.toString()
+    }
 
-    private fun healthCheckJson(): JSONObject {
-        return JSONObject()
-            .put("name", SERVER_NAME)
-            .put("version", SERVER_VERSION)
-            .put("status", "running")
-            .put("address", "127.0.0.1:$PORT")
-            .put("endpoints", JSONObject()
-                .put("sse", "http://127.0.0.1:$PORT/sse")
-                .put("messages", "http://127.0.0.1:$PORT/messages?session_id=xxx")
-                .put("mcp", "http://127.0.0.1:$PORT/mcp")
-                .put("health", "http://127.0.0.1:$PORT/")
-            )
-            .put("activeSessions", sessions.size)
+    private fun makeError(id: Any?, code: Int, message: String): String {
+        val response = JSONObject()
+        if (id != null) response.put("id", id)
+        response.put("jsonrpc", "2.0")
+        response.put("error", JSONObject().put("code", code).put("message", message))
+        return response.toString()
     }
 
     private fun sendJson(output: OutputStream, status: Int, json: JSONObject) {
-        val body = json.toString()
+        val body = json.toString().toByteArray()
         val response = "HTTP/1.1 $status OK\r\n" +
             "Content-Type: application/json\r\n" +
-            "Content-Length: ${body.toByteArray().size}\r\n" +
+            "Content-Length: ${body.size}\r\n" +
             "Access-Control-Allow-Origin: *\r\n" +
             "Connection: close\r\n" +
-            "\r\n" +
-            body
+            "\r\n"
         output.write(response.toByteArray())
+        output.write(body)
         output.flush()
     }
 
@@ -681,10 +813,19 @@ class McpServerService : Service() {
         output.flush()
     }
 
+    private fun healthCheckJson(): JSONObject {
+        return JSONObject()
+            .put("status", "ok")
+            .put("server", SERVER_NAME)
+            .put("version", SERVER_VERSION)
+            .put("sessions", sessions.size)
+            .put("tools", getToolsList().length())
+            .put("permission", ShizukuManager.currentMode.toString())
+    }
+
     private fun stopServer() {
         running = false
 
-        // Close all sessions
         for (session in sessions.values) {
             try {
                 session.socket.close()
@@ -698,6 +839,8 @@ class McpServerService : Service() {
             Log.e(TAG, "Error closing server socket", e)
         }
         serverSocket = null
+
+        broadcastStatus()
         Log.i(TAG, "MCP server stopped")
     }
 

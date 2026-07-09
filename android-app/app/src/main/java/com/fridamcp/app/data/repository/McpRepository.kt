@@ -1,13 +1,23 @@
 package com.fridamcp.app.data.repository
 
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import com.fridamcp.app.data.model.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 class McpRepository(private val context: Context) {
+
+    companion object {
+        const val ACTION_SERVER_STATUS = "com.fridamcp.app.SERVER_STATUS"
+        const val EXTRA_RUNNING = "running"
+        const val EXTRA_SESSIONS = "sessions"
+        const val EXTRA_TOOLS = "tools"
+        const val EXTRA_CLIENTS = "clients"
+    }
 
     private val _serverStatus = MutableStateFlow(
         MCPServerStatus(
@@ -17,7 +27,7 @@ class McpRepository(private val context: Context) {
             transport = "sse",
             startTime = 0,
             activeSessions = 0,
-            totalTools = 26,
+            totalTools = 0, // 从服务实际获取
             connectedClients = 0,
         )
     )
@@ -26,16 +36,22 @@ class McpRepository(private val context: Context) {
     private val _sessions = MutableStateFlow<List<MCPSession>>(emptyList())
     val sessions: StateFlow<List<MCPSession>> = _sessions.asStateFlow()
 
+    /**
+     * 真实模块定义 — 与 McpServerService.getToolsList() 一一对应
+     * toolCount 从实际代码中统计，不是虚构数字
+     */
     private val _modules = MutableStateFlow(
         listOf(
-            MCPModule("process", "进程管理", "进程列表、应用启动、附加进程", 8, "Apps", true),
-            MCPModule("hook", "Hook 管理", "Java/Native Hook、方法追踪", 7, "Code", true),
-            MCPModule("memory", "内存检查", "内存读写、搜索、模块列表", 6, "Memory", true),
-            MCPModule("network", "网络监控", "SSL Hook、HTTP 捕获", 5, "Network", true),
-            MCPModule("filesystem", "文件系统", "文件读写、推送拉取", 6, "File", true),
-            MCPModule("ui_automation", "UI 自动化", "点击、输入、截图", 5, "UI", true),
-            MCPModule("crypto", "加密分析", "Cipher Hook、密钥导出", 3, "Crypto", true),
-            MCPModule("log", "日志捕获", "logcat、Frida 脚本日志", 4, "Log", true),
+            MCPModule("system", "系统管理", "设备信息、系统状态、ping", 3, "Info", true),
+            MCPModule("process", "进程管理", "进程列表、应用启动/杀死、注入检测", 5, "Apps", true),
+            MCPModule("filesystem", "文件系统", "文件列表、读取、应用信息", 3, "File", true),
+            MCPModule("ui_automation", "UI 自动化", "点击、滑动、输入、按键、截图", 5, "UI", true),
+            MCPModule("log", "日志捕获", "logcat 获取/清除", 2, "Log", true),
+            MCPModule("memory", "内存检查", "模块列表、内存读取", 2, "Memory", true),
+            MCPModule("injection", "APK 注入", "frida-gadget APK 注入", 1, "Inject", true),
+            MCPModule("session", "会话管理", "MCP 会话列表/关闭", 2, "Session", true),
+            MCPModule("shell", "Shell 执行", "通过 Shizuku/Root 执行命令", 1, "Terminal", true),
+            MCPModule("frida", "Frida 脚本", "在目标进程执行 JS", 1, "Code", true),
         )
     )
     val modules: StateFlow<List<MCPModule>> = _modules.asStateFlow()
@@ -46,62 +62,84 @@ class McpRepository(private val context: Context) {
     private val _tasks = MutableStateFlow<List<InjectionTask>>(emptyList())
     val tasks: StateFlow<List<InjectionTask>> = _tasks.asStateFlow()
 
-    /** Start MCP server via foreground service */
-    fun startServer() {
-        _serverStatus.value = _serverStatus.value.copy(
-            running = true,
-            startTime = System.currentTimeMillis(),
-        )
-        addLog(LogLevel.INFO, "McpServer", "MCP 服务器已启动 — 监听 127.0.0.1:${_serverStatus.value.port}")
-        addLog(LogLevel.INFO, "McpServer", "SSE 端点: http://127.0.0.1:${_serverStatus.value.port}/sse")
-        addLog(LogLevel.INFO, "McpServer", "消息端点: http://127.0.0.1:${_serverStatus.value.port}/messages?session_id=xxx")
-        addLog(LogLevel.INFO, "McpServer", "HTTP 端点: http://127.0.0.1:${_serverStatus.value.port}/mcp")
-        addLog(LogLevel.INFO, "McpServer", "AI 工具配置 URL: http://127.0.0.1:${_serverStatus.value.port}/sse")
+    /** 真实工具总数 = 所有启用模块的 toolCount 之和 */
+    private fun computeToolCount(): Int = _modules.value.filter { it.enabled }.sumOf { it.toolCount }
 
-        // Start the foreground service
+    /**
+     * 启动 MCP 服务器 — 先启动服务，由服务回调确认状态
+     * 不在这里假设成功
+     */
+    fun startServer() {
+        addLog(LogLevel.INFO, "McpServer", "正在启动 MCP 服务器...")
+
         try {
             val intent = Intent(context, com.fridamcp.app.data.service.McpServerService::class.java)
             intent.action = com.fridamcp.app.data.service.McpServerService.ACTION_START
             context.startForegroundService(intent)
+            // 状态由 McpServerService 通过 broadcast 更新
         } catch (e: Exception) {
             addLog(LogLevel.ERROR, "McpServer", "启动 MCP 服务失败: ${e.message}")
+            _serverStatus.value = _serverStatus.value.copy(running = false)
         }
     }
 
-    /** Stop MCP server */
+    /** 停止 MCP 服务器 */
     fun stopServer() {
-        _serverStatus.value = _serverStatus.value.copy(
-            running = false,
-            startTime = 0,
-            activeSessions = 0,
-            connectedClients = 0,
-        )
-        _sessions.value = emptyList()
-        addLog(LogLevel.INFO, "McpServer", "MCP 服务器已停止")
+        addLog(LogLevel.INFO, "McpServer", "正在停止 MCP 服务器...")
 
         try {
             val intent = Intent(context, com.fridamcp.app.data.service.McpServerService::class.java)
             intent.action = com.fridamcp.app.data.service.McpServerService.ACTION_STOP
             context.startForegroundService(intent)
         } catch (e: Exception) {
-            // ignore
+            addLog(LogLevel.ERROR, "McpServer", "停止 MCP 服务失败: ${e.message}")
         }
+
+        // 立即更新 UI — 服务即将停止
+        _serverStatus.value = _serverStatus.value.copy(
+            running = false,
+            activeSessions = 0,
+            connectedClients = 0,
+        )
+        _sessions.value = emptyList()
     }
 
-    /** Toggle module enabled state */
+    /**
+     * 由 McpServerService 调用 — 更新真实状态
+     */
+    fun onServerStatusUpdate(running: Boolean, sessions: Int, tools: Int, clients: Int) {
+        _serverStatus.value = _serverStatus.value.copy(
+            running = running,
+            activeSessions = sessions,
+            totalTools = tools,
+            connectedClients = clients,
+            startTime = if (running && _serverStatus.value.startTime == 0L) System.currentTimeMillis() else if (!running) 0L else _serverStatus.value.startTime,
+        )
+    }
+
+    /** 切换模块 — 真实影响 McpServerService 的工具列表 */
     fun toggleModule(name: String) {
         _modules.value = _modules.value.map { m ->
             if (m.name == name) m.copy(enabled = !m.enabled) else m
         }
+        // 通知服务刷新工具列表
+        val intent = Intent("com.fridamcp.app.MODULE_TOGGLED")
+        intent.setPackage(context.packageName)
+        context.sendBroadcast(intent)
+        addLog(LogLevel.INFO, "Module", "模块 $name 已 ${if (_modules.value.find { it.name == name }?.enabled == true) "启用" else "禁用"}")
     }
 
-    fun addSession(packageName: String, appName: String) {
+    /**
+     * 添加真实会话 — 由 McpServerService 调用
+     * 不再由 UI 层假创建
+     */
+    fun onSessionAdded(sessionId: String, clientAddr: String) {
         val session = MCPSession(
-            id = "sess-${System.currentTimeMillis()}",
+            id = sessionId,
             pid = 0,
-            appName = appName,
-            packageName = packageName,
-            state = "attached",
+            appName = clientAddr,
+            packageName = clientAddr,
+            state = "connected",
             createdAt = System.currentTimeMillis(),
             scriptCount = 0,
             hookCount = 0,
@@ -111,16 +149,18 @@ class McpRepository(private val context: Context) {
         _serverStatus.value = _serverStatus.value.copy(
             activeSessions = _sessions.value.size,
         )
+        addLog(LogLevel.INFO, "McpServer", "客户端已连接: $clientAddr (会话: $sessionId)")
     }
 
-    fun removeSession(packageName: String) {
-        _sessions.value = _sessions.value.filter { it.packageName != packageName }
+    fun onSessionRemoved(sessionId: String) {
+        _sessions.value = _sessions.value.filter { it.id != sessionId }
         _serverStatus.value = _serverStatus.value.copy(
             activeSessions = _sessions.value.size,
         )
+        addLog(LogLevel.INFO, "McpServer", "会话已断开: $sessionId")
     }
 
-    /** Create injection task */
+    /** 创建注入任务 */
     fun createInjectionTask(
         apkPath: String,
         appName: String,

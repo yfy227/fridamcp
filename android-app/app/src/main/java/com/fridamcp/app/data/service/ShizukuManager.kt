@@ -357,23 +357,21 @@ object ShizukuManager {
     }
 
     // ============================================================
-    // frida-server 管理 (需要 Root)
+    // frida-server 管理 (需要 Root 或 Shizuku)
     // ============================================================
 
-    /** 启动 frida-server — 需要 Root */
+    /** 启动 frida-server — Root 或 Shizuku (ADB) 模式均可 */
     fun startFridaServer(): Boolean {
-        if (!rootGranted) {
-            Log.w(TAG, "Cannot start frida-server: no root")
+        if (currentMode == PermissionMode.NONE) {
+            Log.w(TAG, "Cannot start frida-server: no root or shizuku")
             return false
         }
 
-        // 先检查是否已运行
         if (isFridaServerRunning()) {
             Log.i(TAG, "frida-server already running")
             return true
         }
 
-        // 尝试常见路径启动 frida-server
         val fridaPaths = listOf(
             "/data/local/tmp/frida-server",
             "/data/local/tmp/frida-server-arm64",
@@ -383,10 +381,10 @@ object ShizukuManager {
         )
 
         for (path in fridaPaths) {
-            val result = execRoot("test -x $path && echo EXISTS || echo MISSING")
+            val result = execShell("test -x $path && echo EXISTS || echo MISSING")
             if (result.contains("EXISTS")) {
-                Log.i(TAG, "Starting frida-server from $path")
-                execRoot("$path -D &")
+                Log.i(TAG, "Starting frida-server from $path (mode: $currentMode)")
+                execShell("$path -D &")
                 Thread.sleep(1000)
                 if (isFridaServerRunning()) {
                     Log.i(TAG, "frida-server started successfully")
@@ -399,10 +397,10 @@ object ShizukuManager {
         return false
     }
 
-    /** 停止 frida-server — 需要 Root */
+    /** 停止 frida-server — Root 或 Shizuku 均可 */
     fun stopFridaServer(): Boolean {
-        if (!rootGranted) return false
-        execRoot("pkill -f frida-server 2>/dev/null; pkill -f frida_server 2>/dev/null")
+        if (currentMode == PermissionMode.NONE) return false
+        execShell("pkill -f frida-server 2>/dev/null; pkill -f frida_server 2>/dev/null")
         Thread.sleep(500)
         return !isFridaServerRunning()
     }

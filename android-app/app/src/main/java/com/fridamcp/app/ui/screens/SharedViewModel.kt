@@ -1,6 +1,9 @@
 package com.fridamcp.app.ui.screens
 
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.os.Build
 import android.provider.Settings
 import androidx.lifecycle.ViewModel
@@ -11,6 +14,7 @@ import com.fridamcp.app.data.repository.AppRepository
 import com.fridamcp.app.data.repository.DeviceRepository
 import com.fridamcp.app.data.repository.McpRepository
 import com.fridamcp.app.data.service.FloatingWindowService
+import com.fridamcp.app.data.service.InjectionDetector
 import com.fridamcp.app.data.service.ShizukuManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,32 +41,89 @@ class SharedViewModel(
     private val _floatingWindowEnabled = MutableStateFlow(false)
     val floatingWindowEnabled: StateFlow<Boolean> = _floatingWindowEnabled.asStateFlow()
 
+    // === Shizuku / Root ===
+    val permissionMode: String get() = ShizukuManager.currentMode.toString()
+    val shizukuAuthorized: Boolean get() = ShizukuManager.shizukuPermissionGranted
+    val shizukuBinderAlive: Boolean get() = ShizukuManager.shizukuBinderAlive
+    val rootAvailable: Boolean get() = ShizukuManager.rootGranted
+    val fridaServerRunning: Boolean get() = ShizukuManager.isFridaServerRunning()
+    val fridaVersion: String? get() = ShizukuManager.getFridaVersion()
+
+    private val _permissionRequestResult = MutableStateFlow<String?>(null)
+    val permissionRequestResult: StateFlow<String?> = _permissionRequestResult.asStateFlow()
+
     init {
-        // Load real data at startup — device detection is fast (no I/O)
+        // 初始化设备检测
         deviceRepository.refresh()
-        // App loading scans all APKs — defer to background thread to avoid ANR
-        Thread {
-            appRepository.loadInstalledApps()
-            refreshInjectedCount()
-        }.start()
-        mcpRepository.addLog(LogLevel.INFO, "System", "FridaMCP 已启动 — 设备: ${deviceRepository.deviceInfo.value.name}")
-    }
 
-    fun refreshInjectedCount() {
-        _injectedCount.value = apps.value.count {
-            it.injectionStatus == InjectionStatus.INJECTED || it.injectionStatus == InjectionStatus.RUNNING
-        }
-    }
+        // 注册广播接收器 — 接收 McpServerService 的状态更新
+        registerReceivers()
 
-    fun scanAllApps() {
-        mcpRepository.addLog(LogLevel.INFO, "Scanner", "开始扫描 ${apps.value.size} 个应用...")
+        // 后台加载已安装应用
         Thread {
+            mcpRepository.addLog(LogLevel.INFO, "Scanner", "开始扫描已安装应用...")
             appRepository.loadInstalledApps()
             refreshInjectedCount()
             val injected = _injectedCount.value
             mcpRepository.addLog(LogLevel.INFO, "Scanner", "扫描完成 — 发现 $injected 个已注入应用")
         }.start()
     }
+
+    // =====================================================================
+    // 广播接收器 — 接收 McpServerService 的真实状态
+    // =====================================================================
+
+    private fun registerReceivers() {
+        val filter = IntentFilter().apply {
+            addAction("com.fridamcp.app.SERVER_STATUS")
+            addAction("com.fridamcp.app.SESSION_ADDED")
+            addAction("com.fridamcp.app.SESSION_REMOVED")
+            addAction("com.fridamcp.app.MODULE_TOGGLED")
+        }
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                appRepository.context.registerReceiver(serverStatusReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+            } else {
+                appRepository.context.registerReceiver(serverStatusReceiver, filter)
+            }
+        } catch (e: Exception) {
+            // 忽略重复注册
+        }
+    }
+
+    private val serverStatusReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            when (intent?.action) {
+                "com.fridamcp.app.SERVER_STATUS" -> {
+                    val running = intent.getBooleanExtra("running", false)
+                    val sessions = intent.getIntExtra("sessions", 0)
+                    val tools = intent.getIntExtra("tools", 0)
+                    val clients = intent.getIntExtra("clients", 0)
+                    mcpRepository.onServerStatusUpdate(running, sessions, tools, clients)
+                }
+                "com.fridamcp.app.SESSION_ADDED" -> {
+                    val sid = intent.getStringExtra("session_id") ?: return
+                    val addr = intent.getStringExtra("client_addr") ?: "unknown"
+                    mcpRepository.onSessionAdded(sid, addr)
+                }
+                "com.fridamcp.app.SESSION_REMOVED" -> {
+                    val sid = intent.getStringExtra("session_id") ?: return
+                    mcpRepository.onSessionRemoved(sid)
+                }
+            }
+        }
+    }
+
+    override fun onCleared() {
+        try {
+            appRepository.context.unregisterReceiver(serverStatusReceiver)
+        } catch (e: Exception) {}
+        super.onCleared()
+    }
+
+    // =====================================================================
+    // 扫描
+    // =====================================================================
 
     fun scanApp(packageName: String) {
         Thread {
@@ -71,6 +132,10 @@ class SharedViewModel(
             mcpRepository.addLog(LogLevel.INFO, "Scanner", "已重新扫描: $packageName")
         }.start()
     }
+
+    // =====================================================================
+    // MCP 服务器
+    // =====================================================================
 
     fun toggleMCPServer() {
         if (serverStatus.value.running) {
@@ -84,7 +149,10 @@ class SharedViewModel(
         mcpRepository.toggleModule(name)
     }
 
-    /** Toggle floating window overlay */
+    // =====================================================================
+    // 悬浮窗
+    // =====================================================================
+
     fun toggleFloatingWindow() {
         if (_floatingWindowEnabled.value) {
             hideFloatingWindow()
@@ -97,6 +165,11 @@ class SharedViewModel(
         val ctx = appRepository.context
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(ctx)) {
             mcpRepository.addLog(LogLevel.WARNING, "FloatingWindow", "需要悬浮窗权限 — 请在设置中开启")
+            // 打开设置页面
+            val intent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION)
+            intent.data = android.net.Uri.parse("package:${ctx.packageName}")
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            ctx.startActivity(intent)
             return
         }
         val intent = Intent(ctx, FloatingWindowService::class.java)
@@ -107,28 +180,21 @@ class SharedViewModel(
     }
 
     fun hideFloatingWindow() {
-        val ctx = appRepository.context
-        ctx.stopService(Intent(ctx, FloatingWindowService::class.java))
+        val intent = Intent(appRepository.context, FloatingWindowService::class.java)
+        intent.action = FloatingWindowService.ACTION_HIDE
+        appRepository.context.startService(intent)
         _floatingWindowEnabled.value = false
         mcpRepository.addLog(LogLevel.INFO, "FloatingWindow", "悬浮窗已隐藏")
     }
 
-    // === Shizuku / Root ===
-    val permissionMode: String get() = ShizukuManager.currentMode.toString()
-    val shizukuAuthorized: Boolean get() = ShizukuManager.shizukuPermissionGranted
-    val shizukuBinderAlive: Boolean get() = ShizukuManager.shizukuBinderAlive
-    val rootAvailable: Boolean get() = ShizukuManager.rootGranted
-    val fridaServerRunning: Boolean get() = ShizukuManager.isFridaServerRunning()
-    val fridaVersion: String? get() = ShizukuManager.getFridaVersion()
-
-    private val _permissionRequestResult = MutableStateFlow<String?>(null)
-    val permissionRequestResult: StateFlow<String?> = _permissionRequestResult.asStateFlow()
+    // =====================================================================
+    // Shizuku / Root 权限
+    // =====================================================================
 
     fun requestShizuku() {
         val ctx = appRepository.context
         mcpRepository.addLog(LogLevel.INFO, "Shizuku", "正在请求 Shizuku 授权...")
 
-        // 设置回调
         ShizukuManager.onShizukuPermissionResult = { granted: Boolean ->
             ShizukuManager.refresh()
             val mode = ShizukuManager.currentMode
@@ -144,7 +210,6 @@ class SharedViewModel(
 
         ShizukuManager.requestShizukuPermission(ctx)
 
-        // 也刷新一次状态
         ShizukuManager.refresh()
         if (!ShizukuManager.shizukuBinderAlive) {
             _permissionRequestResult.value = "⚠️ Shizuku 未运行 — 请先启动 Shizuku 服务"
@@ -158,43 +223,55 @@ class SharedViewModel(
         mcpRepository.addLog(LogLevel.INFO, "Permission", ShizukuManager.getPermissionStatusText())
     }
 
+    /**
+     * 启动 frida-server — Root 或 Shizuku (ADB) 模式均可
+     * (之前只检查 ROOT，遗漏了 Shizuku)
+     */
     fun startFridaServer() {
         ShizukuManager.refresh()
-        if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.ROOT) {
-            val started = ShizukuManager.startFridaServer()
-            if (started) {
-                mcpRepository.addLog(LogLevel.INFO, "FridaServer", "frida-server 已启动")
-            } else {
-                mcpRepository.addLog(LogLevel.ERROR, "FridaServer", "frida-server 启动失败 — 请检查是否已下载")
-            }
+        val mode = ShizukuManager.currentMode
+        if (mode == ShizukuManager.PermissionMode.NONE) {
+            mcpRepository.addLog(LogLevel.WARNING, "FridaServer", "需要 Shizuku 或 Root 权限才能启动 frida-server")
+            return
+        }
+
+        val started = ShizukuManager.startFridaServer()
+        if (started) {
+            mcpRepository.addLog(LogLevel.INFO, "FridaServer", "frida-server 已启动 (via $mode)")
         } else {
-            mcpRepository.addLog(LogLevel.WARNING, "FridaServer", "需要 Root 权限才能启动 frida-server")
+            mcpRepository.addLog(LogLevel.ERROR, "FridaServer", "frida-server 启动失败 — 请检查是否已下载到 /data/local/tmp/")
         }
         deviceRepository.refresh()
     }
 
     fun stopFridaServer() {
         ShizukuManager.refresh()
-        if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.ROOT) {
-            val stopped = ShizukuManager.stopFridaServer()
-            mcpRepository.addLog(
-                LogLevel.INFO,
-                "FridaServer",
-                if (stopped) "frida-server 已停止" else "frida-server 停止失败"
-            )
-        } else {
-            mcpRepository.addLog(LogLevel.WARNING, "FridaServer", "需要 Root 权限才能停止 frida-server")
+        val mode = ShizukuManager.currentMode
+        if (mode == ShizukuManager.PermissionMode.NONE) {
+            mcpRepository.addLog(LogLevel.WARNING, "FridaServer", "需要 Shizuku 或 Root 权限才能停止 frida-server")
+            return
         }
+
+        val stopped = ShizukuManager.stopFridaServer()
+        mcpRepository.addLog(
+            LogLevel.INFO,
+            "FridaServer",
+            if (stopped) "frida-server 已停止" else "frida-server 停止失败"
+        )
         deviceRepository.refresh()
     }
 
     fun openShizukuSettings() {
         try {
-            appRepository.context.startActivity(com.fridamcp.app.data.service.ShizukuManager.getShizukuSettingsIntent())
+            appRepository.context.startActivity(ShizukuManager.getShizukuSettingsIntent())
         } catch (e: Exception) {
             mcpRepository.addLog(LogLevel.ERROR, "Shizuku", "打开设置失败: ${e.message} — 请先安装 Shizuku")
         }
     }
+
+    // =====================================================================
+    // 应用管理
+    // =====================================================================
 
     fun launchApp(packageName: String) {
         try {
@@ -211,45 +288,87 @@ class SharedViewModel(
         }
     }
 
+    /**
+     * 切换应用的 MCP 会话 — 真实检测 frida-gadget 是否在运行
+     * 不再假设会话创建成功
+     */
     fun toggleAppMCP(app: AppInfo) {
         when (app.mcpStatus) {
             MCPServiceStatus.ONLINE -> {
                 appRepository.updateAppStatus(app.packageName, app.injectionStatus, MCPServiceStatus.OFFLINE)
-                mcpRepository.removeSession(app.packageName)
                 mcpRepository.addLog(LogLevel.INFO, "McpServer", "已断开 MCP 会话: ${app.packageName}")
             }
             else -> {
-                // Launch the app first if not running
-                try {
+                // 先检查应用是否在运行
+                val pidResult = ShizukuManager.execShell("pidof ${app.packageName}")
+                val pid = pidResult.trim().toIntOrNull()
+
+                if (pid == null || pid <= 0) {
+                    // 应用未运行 — 启动它
                     val launchIntent = appRepository.context.packageManager.getLaunchIntentForPackage(app.packageName)
                     if (launchIntent != null) {
                         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         appRepository.context.startActivity(launchIntent)
                         mcpRepository.addLog(LogLevel.INFO, "ProcessManager", "已启动: ${app.packageName}")
+                        // 等待应用启动
+                        Thread.sleep(2000)
+                    } else {
+                        mcpRepository.addLog(LogLevel.ERROR, "McpServer", "无法启动 ${app.packageName} — 无启动 Activity")
+                        return
                     }
-                } catch (e: Exception) {
-                    mcpRepository.addLog(LogLevel.WARNING, "ProcessManager", "启动失败: ${e.message}")
                 }
-                appRepository.updateAppStatus(app.packageName, InjectionStatus.RUNNING, MCPServiceStatus.ONLINE)
-                mcpRepository.addSession(app.packageName, app.appName)
-                mcpRepository.addLog(LogLevel.INFO, "McpServer", "已创建 MCP 会话: ${app.packageName}")
+
+                // 检查 frida-gadget 是否在该进程中运行
+                val detector = InjectionDetector(appRepository.context)
+                val runtimeResult = detector.detectProcess(app.packageName)
+
+                if (runtimeResult.detected) {
+                    // gadget 在运行 — 可以连接
+                    appRepository.updateAppStatus(app.packageName, InjectionStatus.RUNNING, MCPServiceStatus.ONLINE)
+                    mcpRepository.addLog(LogLevel.INFO, "McpServer", "MCP 会话已建立: ${app.packageName} (gadget 检测到)")
+                    mcpRepository.addLog(LogLevel.INFO, "McpServer", "frida-gadget listen on 127.0.0.1:27042")
+                } else {
+                    // gadget 未检测到
+                    appRepository.updateAppStatus(app.packageName, InjectionStatus.INJECTED, MCPServiceStatus.ERROR)
+                    mcpRepository.addLog(LogLevel.WARNING, "McpServer", "应用 ${app.packageName} 已注入但未检测到运行中的 frida-gadget")
+                    mcpRepository.addLog(LogLevel.WARNING, "McpServer", "请确保: 1) 应用已正确注入 2) gadget config 端口为 27042")
+                }
             }
         }
     }
 
+    /**
+     * 移除注入标记 — 清除应用注入状态
+     * 注意: 这不会卸载应用，只是清除 UI 中的注入标记
+     * 如需卸载已注入的应用，请手动卸载
+     */
     fun removeInjection(app: AppInfo) {
         appRepository.updateAppStatus(app.packageName, InjectionStatus.NOT_INJECTED, null)
         refreshInjectedCount()
+        mcpRepository.addLog(LogLevel.INFO, "Injector", "已移除注入标记: ${app.packageName} (如需卸载请手动操作)")
+    }
+
+    fun uninstallInjectedApp(app: AppInfo) {
         try {
             val intent = Intent(Intent.ACTION_DELETE)
             intent.data = android.net.Uri.parse("package:${app.packageName}")
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             appRepository.context.startActivity(intent)
-            mcpRepository.addLog(LogLevel.WARNING, "Injector", "正在卸载已注入应用: ${app.packageName}")
+            mcpRepository.addLog(LogLevel.WARNING, "Injector", "正在卸载: ${app.packageName}")
         } catch (e: Exception) {
-            mcpRepository.addLog(LogLevel.WARNING, "Injector", "已移除标记: ${app.packageName} (需手动卸载)")
+            mcpRepository.addLog(LogLevel.ERROR, "Injector", "卸载失败: ${e.message}")
         }
     }
+
+    private fun refreshInjectedCount() {
+        _injectedCount.value = apps.value.count {
+            it.injectionStatus == InjectionStatus.INJECTED || it.injectionStatus == InjectionStatus.RUNNING
+        }
+    }
+
+    // =====================================================================
+    // APK 注入
+    // =====================================================================
 
     fun startInjection(
         apkPath: String,
@@ -261,16 +380,13 @@ class SharedViewModel(
         mcpRepository.addLog(LogLevel.INFO, "ApkInjector", "开始注入: $appName ($packageName) [$arch]")
         val task = mcpRepository.createInjectionTask(apkPath, appName, packageName, arch, useApktool)
 
-        // Run injection in background
         Thread {
             try {
                 val injector = com.fridamcp.app.data.service.ApkInjector(appRepository.context)
 
-                // Step 1: Detect arch (from parameter or auto)
                 mcpRepository.updateTask(task.id, 10, InjectionTaskStatus.INJECTING)
                 mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "目标架构: $arch")
 
-                // Step 2: Inject gadget
                 mcpRepository.updateTask(task.id, 30, InjectionTaskStatus.INJECTING)
                 mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "注入 frida-gadget...")
 
