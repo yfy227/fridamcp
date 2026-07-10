@@ -12,7 +12,8 @@ setup(
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/yfy227/fridamcp",
-    packages=find_packages(),
+    package_dir={"": "fridamcp"},
+    packages=find_packages(where="fridamcp"),
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",

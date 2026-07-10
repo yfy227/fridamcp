@@ -16,6 +16,9 @@ import com.fridamcp.app.data.repository.McpRepository
 import com.fridamcp.app.data.service.FloatingWindowService
 import com.fridamcp.app.data.service.InjectionDetector
 import com.fridamcp.app.data.service.ShizukuManager
+import com.fridamcp.app.data.service.isValidPackageName
+import com.fridamcp.app.data.service.requirePackageName
+import com.fridamcp.app.data.service.shellQuote
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -317,8 +320,12 @@ class SharedViewModel(
             }
             else -> {
                 // 先检查应用是否在运行
-                val pidResult = ShizukuManager.execShell("pidof ${app.packageName}")
-                val pid = pidResult.trim().toIntOrNull()
+                val safePackage = try { requirePackageName(app.packageName) } catch (e: IllegalArgumentException) {
+                    mcpRepository.addLog(LogLevel.ERROR, "McpServer", e.message ?: "包名不合法")
+                    return
+                }
+                var pidResult = ShizukuManager.execShell("pidof ${shellQuote(safePackage)}")
+                var pid = pidResult.trim().lines().firstOrNull()?.trim()?.toIntOrNull()
 
                 if (pid == null || pid <= 0) {
                     // 应用未运行 — 启动它
@@ -327,8 +334,10 @@ class SharedViewModel(
                         launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         appRepository.context.startActivity(launchIntent)
                         mcpRepository.addLog(LogLevel.INFO, "ProcessManager", "已启动: ${app.packageName}")
-                        // 等待应用启动
+                        // 等待应用启动后重新读取 PID
                         Thread.sleep(2000)
+                        pidResult = ShizukuManager.execShell("pidof ${shellQuote(safePackage)}")
+                        pid = pidResult.trim().lines().firstOrNull()?.trim()?.toIntOrNull()
                     } else {
                         mcpRepository.addLog(LogLevel.ERROR, "McpServer", "无法启动 ${app.packageName} — 无启动 Activity")
                         return
@@ -341,7 +350,7 @@ class SharedViewModel(
 
                 if (runtimeResult.detected) {
                     // gadget 在运行 — 可以连接
-                    appRepository.updateAppStatus(app.packageName, InjectionStatus.RUNNING, MCPServiceStatus.ONLINE)
+                    appRepository.updateAppStatus(app.packageName, InjectionStatus.RUNNING, MCPServiceStatus.ONLINE, pid = pid)
                     mcpRepository.addLog(LogLevel.INFO, "McpServer", "MCP 会话已建立: ${app.packageName} (gadget 检测到)")
                     mcpRepository.addLog(LogLevel.INFO, "McpServer", "frida-gadget listen on 127.0.0.1:27042")
                 } else {
@@ -360,7 +369,7 @@ class SharedViewModel(
      * 如需卸载已注入的应用，请手动卸载
      */
     fun removeInjection(app: AppInfo) {
-        appRepository.updateAppStatus(app.packageName, InjectionStatus.NOT_INJECTED, null)
+        appRepository.updateAppStatus(app.packageName, InjectionStatus.NOT_INJECTED, null, clearMcp = true)
         refreshInjectedCount()
         mcpRepository.addLog(LogLevel.INFO, "Injector", "已移除注入标记: ${app.packageName} (如需卸载请手动操作)")
     }
@@ -447,6 +456,18 @@ class SharedViewModel(
         packageName: String,
         arch: String,
     ): InjectionTask {
+        if (!apkPath.endsWith(".apk", ignoreCase = true) || !java.io.File(apkPath).exists()) {
+            mcpRepository.addLog(LogLevel.ERROR, "ApkInjector", "APK 路径无效: $apkPath")
+            return mcpRepository.createInjectionTask(apkPath, appName.ifBlank { "Unknown" }, packageName.ifBlank { "invalid" }, arch).also {
+                mcpRepository.updateTask(it.id, 0, InjectionTaskStatus.ERROR, error = "APK 路径无效")
+            }
+        }
+        if (!isValidPackageName(packageName)) {
+            mcpRepository.addLog(LogLevel.ERROR, "ApkInjector", "包名格式不合法: $packageName")
+            return mcpRepository.createInjectionTask(apkPath, appName.ifBlank { "Unknown" }, packageName.ifBlank { "invalid" }, arch).also {
+                mcpRepository.updateTask(it.id, 0, InjectionTaskStatus.ERROR, error = "包名格式不合法")
+            }
+        }
         mcpRepository.addLog(LogLevel.INFO, "ApkInjector", "开始注入: $appName ($packageName) [$arch]")
         val task = mcpRepository.createInjectionTask(apkPath, appName, packageName, arch)
 
@@ -454,16 +475,19 @@ class SharedViewModel(
             try {
                 val injector = com.fridamcp.app.data.service.ApkInjector(appRepository.context)
 
-                mcpRepository.updateTask(task.id, 10, InjectionTaskStatus.INJECTING)
+                mcpRepository.updateTask(task.id, 10, InjectionTaskStatus.ANALYZING)
                 mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "目标架构: $arch")
 
-                mcpRepository.updateTask(task.id, 30, InjectionTaskStatus.INJECTING)
+                mcpRepository.updateTask(task.id, 40, InjectionTaskStatus.INJECTING)
                 mcpRepository.addLog(LogLevel.DEBUG, "ApkInjector", "注入 frida-gadget...")
+
+                mcpRepository.updateTask(task.id, 80, InjectionTaskStatus.SIGNING)
 
                 val result = injector.inject(apkPath, arch)
 
                 when (result) {
                     is com.fridamcp.app.data.service.ApkInjector.Result.Success -> {
+                        mcpRepository.updateTask(task.id, 92, InjectionTaskStatus.INSTALLING, outputApk = result.outputPath)
                         mcpRepository.updateTask(task.id, 100, InjectionTaskStatus.DONE, outputApk = result.outputPath)
                         appRepository.addInjectedApp(task.copy(outputApk = result.outputPath))
                         refreshInjectedCount()

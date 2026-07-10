@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import {
   Smartphone,
   Server,
@@ -29,6 +28,7 @@ interface DashboardScreenProps {
   onToggleMCPServer: () => void;
   onNavigateApps: () => void;
   onNavigateMCP: () => void;
+  scanning: boolean;
 }
 
 export function DashboardScreen({
@@ -40,22 +40,14 @@ export function DashboardScreen({
   onToggleMCPServer,
   onNavigateApps,
   onNavigateMCP,
+  scanning,
 }: DashboardScreenProps) {
-  const [scanning, setScanning] = useState(false);
 
   const injectedApps = apps.filter(
     (a) => a.injectionStatus === "injected" || a.injectionStatus === "running"
   );
   const runningApps = apps.filter((a) => a.injectionStatus === "running");
   const errorApps = apps.filter((a) => a.injectionStatus === "error");
-
-  const handleScan = () => {
-    setScanning(true);
-    setTimeout(() => {
-      setScanning(false);
-      onRefresh();
-    }, 2000);
-  };
 
   return (
     <div className="px-4 pb-6 space-y-4 fade-in">
@@ -157,7 +149,7 @@ export function DashboardScreen({
             注入检测概览
           </h2>
           <button
-            onClick={handleScan}
+            onClick={onRefresh}
             disabled={scanning}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium bg-primary/10 text-primary hover:bg-primary/20 transition-colors disabled:opacity-50"
           >

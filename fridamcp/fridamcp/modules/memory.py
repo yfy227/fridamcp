@@ -16,7 +16,7 @@ MEMORY_READ_TEMPLATE = """
     rpc.exports = {
         read: function(address, size) {
             try {
-                var ptr = new Ptr(address);
+                var ptr = ptr(address);
                 var bytes = Memory.readByteArray(ptr, size);
                 return Array.from(new Uint8Array(bytes)).map(function(b) {
                     return ('00' + b.toString(16)).slice(-2);
@@ -34,12 +34,12 @@ MEMORY_WRITE_TEMPLATE = """
     rpc.exports = {
         write: function(address, hexData) {
             try {
-                var ptr = new Ptr(address);
+                var ptr = ptr(address);
                 var bytes = [];
                 for (var i = 0; i < hexData.length; i += 2) {
                     bytes.push(parseInt(hexData.substr(i, 2), 16));
                 }
-                var buf = Memory.allocUtf8String("");
+                var buf = Memory.alloc(bytes.length);
                 for (var i = 0; i < bytes.length; i++) {
                     buf.add(i).writeU8(bytes[i]);
                 }
@@ -143,6 +143,7 @@ def register_tools(mcp):
             modules = frida_client.call_script_function(
                 session_id, result["script_id"], "list", []
             )
+            frida_client.unload_script(session_id, result["script_id"])
             return modules
         except Exception as e:
             logger.error(f"list_modules failed: {e}")
@@ -170,6 +171,7 @@ def register_tools(mcp):
             exports = frida_client.call_script_function(
                 session_id, result["script_id"], "list", [module_name]
             )
+            frida_client.unload_script(session_id, result["script_id"])
             if isinstance(exports, dict) and "error" in exports:
                 return [exports]
             return exports
@@ -201,6 +203,7 @@ def register_tools(mcp):
             hex_data = frida_client.call_script_function(
                 session_id, result["script_id"], "read", [address, size]
             )
+            frida_client.unload_script(session_id, result["script_id"])
             if isinstance(hex_data, dict) and "error" in hex_data:
                 return hex_data
             # 转换为 ASCII
@@ -242,6 +245,7 @@ def register_tools(mcp):
             ret = frida_client.call_script_function(
                 session_id, result["script_id"], "write", [address, hex_data]
             )
+            frida_client.unload_script(session_id, result["script_id"])
             return ret
         except Exception as e:
             logger.error(f"write_memory failed: {e}")
@@ -285,6 +289,7 @@ def register_tools(mcp):
                 session_id, result["script_id"], "search",
                 [hex_pattern, max_results]
             )
+            frida_client.unload_script(session_id, result["script_id"])
             return ret
         except Exception as e:
             logger.error(f"search_memory failed: {e}")

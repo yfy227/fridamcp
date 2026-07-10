@@ -7,9 +7,21 @@
 import os
 import base64
 import subprocess
+import shlex
+import re
 from typing import Dict, Any, List, Optional
 
 from ..utils.logger import logger
+
+
+_PACKAGE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$")
+
+
+def _validate_package(package: str) -> str:
+    """Validate Android package names before interpolating derived paths."""
+    if not _PACKAGE_RE.fullmatch(package or ""):
+        raise ValueError(f"Invalid package name: {package!r}")
+    return package
 
 
 def _run_adb(args: List[str], capture_output: bool = True) -> subprocess.CompletedProcess:
@@ -54,7 +66,7 @@ def register_tools(mcp):
             文件列表，每个条目包含 name、type、size、perms
         """
         try:
-            output = _run_adb_shell(f'ls -la "{path}"', device)
+            output = _run_adb_shell(f"ls -la {shlex.quote(path)}", device)
             files = []
             for line in output.strip().split("\n")[1:]:  # skip total line
                 if not line.strip():
@@ -98,7 +110,7 @@ def register_tools(mcp):
         """
         try:
             # 先检查文件大小
-            size_output = _run_adb_shell(f'stat -c %s "{path}"', device)
+            size_output = _run_adb_shell(f"stat -c %s {shlex.quote(path)}", device)
             size = int(size_output.strip()) if size_output.strip().isdigit() else 0
 
             if size > max_size:
@@ -109,7 +121,7 @@ def register_tools(mcp):
                 }
 
             # 读取文件
-            output = _run_adb_shell(f'cat "{path}"', device)
+            output = _run_adb_shell(f"cat {shlex.quote(path)}", device)
 
             return {
                 "path": path,
@@ -209,15 +221,16 @@ def register_tools(mcp):
         """
         try:
             # 获取应用数据路径
+            package = _validate_package(package)
             base_path = f"/data/data/{package}"
             try:
                 output = _run_adb_shell(
-                    f'ls -la "{base_path}"', device
+                    f"ls -la {shlex.quote(base_path)}", device
                 )
             except RuntimeError:
                 # 可能需要 root
                 output = _run_adb_shell(
-                    f'su -c \'ls -la "{base_path}"\'', device
+                    f"su -c {shlex.quote('ls -la '+shlex.quote(base_path))}", device
                 )
 
             files = []
@@ -263,8 +276,9 @@ def register_tools(mcp):
             应用信息字典
         """
         try:
+            package = _validate_package(package)
             output = _run_adb_shell(
-                f'dumpsys package {package}', device
+                f"dumpsys package {shlex.quote(package)}", device
             )
             info = {"package": package, "raw": output[:8192]}
             # 解析关键字段

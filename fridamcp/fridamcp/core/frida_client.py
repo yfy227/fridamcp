@@ -115,11 +115,17 @@ class FridaClient:
             # 通过名称查找 PID
             procs = device.enumerate_processes()
             pid = None
-            for p in procs:
-                if p.name == target or p.name.startswith(target):
-                    pid = p.pid
-                    name = p.name
-                    break
+            exact = [p for p in procs if p.name == target]
+            prefix = [p for p in procs if p.name.startswith(str(target))]
+            matches = exact or prefix
+            if len(matches) > 1 and not exact:
+                raise RuntimeError(
+                    f"Ambiguous process target {target!r}: "
+                    + ", ".join(f"{p.name}({p.pid})" for p in matches[:10])
+                )
+            if matches:
+                pid = matches[0].pid
+                name = matches[0].name
             if pid is None:
                 raise RuntimeError(f"Process not found: {target}")
 
@@ -128,13 +134,13 @@ class FridaClient:
 
     def resume(self, pid: int):
         """恢复暂停的进程"""
-        device = device_manager.get_current_device()
+        device = self._get_device()
         device.resume(pid)
         logger.info(f"Resumed pid={pid}")
 
     def kill(self, pid: int):
         """杀死进程"""
-        device = device_manager.get_current_device()
+        device = self._get_device()
         device.kill(pid)
         logger.info(f"Killed pid={pid}")
 

@@ -30,6 +30,7 @@ interface AppDetailSheetProps {
   onToggleMCP: (app: AppInfo) => void;
   onRescan: (app: AppInfo) => void;
   onRemoveInjection: (app: AppInfo) => void;
+  busy?: boolean;
 }
 
 export function AppDetailSheet({
@@ -39,6 +40,7 @@ export function AppDetailSheet({
   onToggleMCP,
   onRescan,
   onRemoveInjection,
+  busy,
 }: AppDetailSheetProps) {
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
 
@@ -210,32 +212,38 @@ export function AppDetailSheet({
             {isInjected && (
               <button
                 onClick={() => onLaunch(app)}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-muted/50 text-foreground font-medium text-sm hover:bg-muted transition-colors"
+                disabled={busy}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-muted/50 text-foreground font-medium text-sm hover:bg-muted transition-colors disabled:opacity-50"
               >
                 <Play className="w-4 h-4" />
-                {app.injectionStatus === "running" ? "应用运行中" : "启动应用"}
+                {busy ? "处理中..." : app.injectionStatus === "running" ? "停止应用" : "启动应用"}
               </button>
             )}
 
             {isInjected && (
               <button
                 onClick={() => onToggleMCP(app)}
+                disabled={busy || app.mcpStatus === "starting"}
                 className={cn(
                   "w-full flex items-center justify-center gap-2 py-3 rounded-xl font-semibold text-sm transition-colors",
                   app.mcpStatus === "online"
                     ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
-                    : "bg-primary text-primary-foreground hover:bg-primary/90"
+                    : app.mcpStatus === "starting"
+                      ? "bg-amber-400/15 text-amber-400"
+                      : "bg-primary text-primary-foreground hover:bg-primary/90",
+                  "disabled:opacity-60"
                 )}
               >
                 {app.mcpStatus === "online" ? <Square className="w-4 h-4" /> : <Server className="w-4 h-4" />}
-                {app.mcpStatus === "online" ? "停止 MCP 服务" : "拉起 MCP 服务"}
+                {app.mcpStatus === "starting" ? "MCP 启动中..." : app.mcpStatus === "online" ? "停止 MCP 服务" : "拉起 MCP 服务"}
               </button>
             )}
 
             <div className="flex gap-2">
               <button
                 onClick={() => onRescan(app)}
-                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-muted/30 text-muted-foreground font-medium text-xs hover:bg-muted transition-colors"
+                disabled={busy}
+                className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-muted/30 text-muted-foreground font-medium text-xs hover:bg-muted transition-colors disabled:opacity-50"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 重新检测
@@ -243,7 +251,8 @@ export function AppDetailSheet({
               {isInjected && (
                 <button
                   onClick={handleRemoveClick}
-                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-destructive/10 text-destructive font-medium text-xs hover:bg-destructive/20 transition-colors"
+                  disabled={busy}
+                  className="flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl bg-destructive/10 text-destructive font-medium text-xs hover:bg-destructive/20 transition-colors disabled:opacity-50"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   移除注入

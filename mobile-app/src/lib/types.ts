@@ -92,10 +92,12 @@ export interface InjectionTask {
   apkPath: string;
   appName: string;
   packageName: string;
-  status: "pending" | "injecting" | "signing" | "done" | "error";
+  status: "pending" | "analyzing" | "injecting" | "signing" | "installing" | "done" | "error";
   progress: number;
   arch: string;
   useApktool: boolean;
+  autoInstall?: boolean;
+  autoScan?: boolean;
   outputApk?: string;
   error?: string;
   createdAt: number;
@@ -132,3 +134,15 @@ export interface ScanResult {
 
 /** Bottom navigation tab */
 export type TabId = "dashboard" | "apps" | "inject" | "mcp" | "settings";
+
+
+/** User-provided options for creating an injection task. */
+export interface InjectionOptions {
+  apkPath: string;
+  appName?: string;
+  packageName?: string;
+  arch: string;
+  useApktool: boolean;
+  autoInstall: boolean;
+  autoScan: boolean;
+}

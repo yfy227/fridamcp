@@ -374,10 +374,14 @@ def main():
     if args.no_auto_restart:
         os.environ["FRIDAMCP_AUTO_RESTART_MAX"] = "0"
 
-    # 重新加载配置
-    from importlib import reload
-    from . import config as config_module
-    reload(config_module)
+    # 同步运行时配置对象。避免 reload 后其他已导入模块仍持有旧 config 对象。
+    config.MCP_HOST = args.host
+    config.MCP_PORT = args.port
+    config.FRIDA_DEVICE_TYPE = args.device_type
+    if args.device_id:
+        config.FRIDA_DEVICE_ID = args.device_id
+    if args.no_auto_restart:
+        config.SERVER_AUTO_RESTART_MAX = 0
 
     # 初始化日志
     setup_logging()

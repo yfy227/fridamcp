@@ -8,6 +8,7 @@ import os
 import time
 import base64
 import subprocess
+import shlex
 from typing import Dict, Any, List, Optional
 
 from ..config import config
@@ -60,7 +61,7 @@ def register_tools(mcp):
             操作结果
         """
         try:
-            _run_adb_shell(f"input tap {x} {y}", device)
+            _run_adb_shell(f"input tap {int(x)} {int(y)}", device)
             return {"success": True, "x": x, "y": y}
         except Exception as e:
             logger.error(f"tap failed: {e}")
@@ -90,7 +91,7 @@ def register_tools(mcp):
         """
         try:
             _run_adb_shell(
-                f"input swipe {x1} {y1} {x2} {y2} {duration}", device
+                f"input swipe {int(x1)} {int(y1)} {int(x2)} {int(y2)} {int(duration)}", device
             )
             return {"success": True, "from": [x1, y1], "to": [x2, y2]}
         except Exception as e:
@@ -143,7 +144,7 @@ def register_tools(mcp):
             操作结果
         """
         try:
-            _run_adb_shell(f"input keyevent {keycode}", device)
+            _run_adb_shell(f"input keyevent {shlex.quote(str(keycode))}", device)
             return {"success": True, "keycode": keycode}
         except Exception as e:
             logger.error(f"press_key failed: {e}")
@@ -171,7 +172,7 @@ def register_tools(mcp):
             remote_path = f"/sdcard/{filename}"
 
             # 截图到设备
-            _run_adb_shell(f"screencap -p {remote_path}", device)
+            _run_adb_shell(f"screencap -p {shlex.quote(remote_path)}", device)
 
             # 拉取到本地
             args = []
@@ -184,7 +185,7 @@ def register_tools(mcp):
 
             # 清理设备上的临时文件
             try:
-                _run_adb_shell(f"rm {remote_path}", device)
+                _run_adb_shell(f"rm {shlex.quote(remote_path)}", device)
             except Exception:
                 pass
 
@@ -222,13 +223,13 @@ def register_tools(mcp):
         try:
             remote_path = "/sdcard/ui_dump.xml"
             _run_adb_shell(
-                f"uiautomator dump --compressed {remote_path}", device
+                f"uiautomator dump --compressed {shlex.quote(remote_path)}", device
             )
-            output = _run_adb_shell(f"cat {remote_path}", device)
+            output = _run_adb_shell(f"cat {shlex.quote(remote_path)}", device)
 
             # 清理
             try:
-                _run_adb_shell(f"rm {remote_path}", device)
+                _run_adb_shell(f"rm {shlex.quote(remote_path)}", device)
             except Exception:
                 pass
 

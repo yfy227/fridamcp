@@ -29,6 +29,7 @@ interface AppsScreenProps {
   onSelectApp: (app: AppInfo) => void;
   onLaunchApp: (app: AppInfo) => void;
   onToggleMCP: (app: AppInfo) => void;
+  busyAppId?: string | null;
 }
 
 type FilterType = "all" | "injected" | "running" | "not_injected" | "error";
@@ -40,6 +41,7 @@ export function AppsScreen({
   onSelectApp,
   onLaunchApp,
   onToggleMCP,
+  busyAppId,
 }: AppsScreenProps) {
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<FilterType>("all");
@@ -206,6 +208,7 @@ export function AppsScreen({
               onClick={() => onSelectApp(app)}
               onLaunch={() => onLaunchApp(app)}
               onToggleMCP={() => onToggleMCP(app)}
+              busy={busyAppId === app.id}
             />
           ))
         )}
@@ -219,11 +222,13 @@ function AppCard({
   onClick,
   onLaunch,
   onToggleMCP,
+  busy,
 }: {
   app: AppInfo;
   onClick: () => void;
   onLaunch: () => void;
   onToggleMCP: () => void;
+  busy?: boolean;
 }) {
   const statusConfig = getStatusConfig(app.injectionStatus);
 
@@ -280,22 +285,27 @@ function AppCard({
         <div className="flex items-center gap-2 mt-3 pt-3 border-t border-border/50">
           <button
             onClick={onLaunch}
-            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium bg-muted/50 text-foreground hover:bg-muted transition-colors"
+            disabled={busy}
+            className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-medium bg-muted/50 text-foreground hover:bg-muted transition-colors disabled:opacity-50"
           >
-            <Play className="w-3.5 h-3.5" />
-            {app.injectionStatus === "running" ? "已运行" : "启动应用"}
+            {app.injectionStatus === "running" ? <Square className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+            {busy ? "处理中..." : app.injectionStatus === "running" ? "停止应用" : "启动应用"}
           </button>
           <button
             onClick={onToggleMCP}
+            disabled={busy || app.mcpStatus === "starting"}
             className={cn(
               "flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-semibold transition-colors",
               app.mcpStatus === "online"
                 ? "bg-destructive/15 text-destructive hover:bg-destructive/25"
-                : "bg-primary text-primary-foreground hover:bg-primary/90"
+                : app.mcpStatus === "starting"
+                  ? "bg-amber-400/15 text-amber-400"
+                  : "bg-primary text-primary-foreground hover:bg-primary/90",
+              "disabled:opacity-60"
             )}
           >
             {app.mcpStatus === "online" ? <Square className="w-3.5 h-3.5" /> : <Server className="w-3.5 h-3.5" />}
-            {app.mcpStatus === "online" ? "停止 MCP" : "拉起 MCP"}
+            {app.mcpStatus === "starting" ? "启动中" : app.mcpStatus === "online" ? "停止 MCP" : "拉起 MCP"}
           </button>
         </div>
       )}

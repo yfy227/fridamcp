@@ -27,9 +27,10 @@ interface MCPScreenProps {
   sessions: MCPSession[];
   modules: MCPModule[];
   onToggleServer: () => void;
+  onToggleModule: (name: string, enabled: boolean) => void;
 }
 
-export function MCPScreen({ server, sessions, modules, onToggleServer }: MCPScreenProps) {
+export function MCPScreen({ server, sessions, modules, onToggleServer, onToggleModule }: MCPScreenProps) {
   const [copied, setCopied] = useState(false);
   const [showModules, setShowModules] = useState(true);
 
@@ -177,7 +178,7 @@ export function MCPScreen({ server, sessions, modules, onToggleServer }: MCPScre
         {showModules && (
           <div className="px-4 pb-4 space-y-1.5 fade-in">
             {modules.map((mod) => (
-              <ModuleRow key={mod.name} module={mod} />
+              <ModuleRow key={mod.name} module={mod} onToggle={onToggleModule} />
             ))}
           </div>
         )}
@@ -186,9 +187,7 @@ export function MCPScreen({ server, sessions, modules, onToggleServer }: MCPScre
   );
 }
 
-function ModuleRow({ module: mod }: { module: MCPModule }) {
-  const [enabled, setEnabled] = useState(mod.enabled);
-
+function ModuleRow({ module: mod, onToggle }: { module: MCPModule; onToggle: (name: string, enabled: boolean) => void }) {
   return (
     <div className="flex items-center gap-3 p-2.5 rounded-xl bg-muted/30">
       <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center text-base shrink-0">
@@ -203,16 +202,16 @@ function ModuleRow({ module: mod }: { module: MCPModule }) {
       </div>
       {/* 开关 */}
       <button
-        onClick={() => setEnabled(!enabled)}
+        onClick={() => onToggle(mod.name, !mod.enabled)}
         className={cn(
           "relative w-9 h-5 rounded-full transition-colors shrink-0",
-          enabled ? "bg-primary" : "bg-muted-foreground/30"
+          mod.enabled ? "bg-primary" : "bg-muted-foreground/30"
         )}
       >
         <span
           className={cn(
             "absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform",
-            enabled ? "translate-x-4" : "translate-x-0.5"
+            mod.enabled ? "translate-x-4" : "translate-x-0.5"
           )}
         />
       </button>

@@ -77,6 +77,8 @@ fun InjectScreen(
                         val pm = ctx.packageManager
                         val info = pm.getPackageArchiveInfo(tempFile.absolutePath, 0)
                         if (info != null) {
+                            info.applicationInfo.sourceDir = tempFile.absolutePath
+                            info.applicationInfo.publicSourceDir = tempFile.absolutePath
                             if (appName.isBlank()) appName = pm.getApplicationLabel(info.applicationInfo).toString()
                             if (packageName.isBlank()) packageName = info.packageName
                         }
@@ -181,7 +183,7 @@ fun InjectScreen(
                         ) {
                             Column {
                                 Text("注入模式", style = MaterialTheme.typography.bodyMedium, color = Foreground)
-                                Text("ZIP 注入 + 自动签名 (libgadget + smali patch)", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
+                                Text("ZIP 注入 + 自动签名；Android 端不做 smali patch，需应用显式加载 Gadget 或使用 spawn 模式", style = MaterialTheme.typography.bodySmall, color = MutedForeground)
                             }
                         }
 
@@ -239,7 +241,7 @@ private fun TaskCard(task: com.fridamcp.app.data.model.InjectionTask) {
     val statusColor = when (task.status) {
         InjectionTaskStatus.DONE -> Success
         InjectionTaskStatus.ERROR -> Error
-        InjectionTaskStatus.INJECTING, InjectionTaskStatus.SIGNING -> Primary
+        InjectionTaskStatus.ANALYZING, InjectionTaskStatus.INJECTING, InjectionTaskStatus.SIGNING, InjectionTaskStatus.INSTALLING -> Primary
         InjectionTaskStatus.PENDING -> MutedForeground
     }
     Card(

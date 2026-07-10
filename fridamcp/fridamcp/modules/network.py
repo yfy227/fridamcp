@@ -13,8 +13,8 @@ from ..config import config
 from ..utils.logger import logger
 
 
-# 全局网络捕获缓冲区
-_capture_buffer: deque = deque(maxlen=config.NETWORK_CAPTURE_LIMIT)
+# 捕获状态：session_id -> script_id 列表
+_capture_scripts: Dict[str, List[str]] = {}
 _capture_active: Dict[str, bool] = {}
 
 
@@ -28,9 +28,18 @@ SSL_HOOK_TEMPLATE = """
         }
     };
 
+    function findExport(names, symbol) {
+        for (var i = 0; i < names.length; i++) {
+            var addr = Module.findExportByName(names[i], symbol);
+            if (addr) return addr;
+        }
+        return Module.findExportByName(null, symbol);
+    }
+
     function hookSSL() {
+        var sslModules = ["libssl.so", "libboringssl.so"];
         // Hook SSL_write
-        var SSL_write = Module.findExportByName("libssl.so", "SSL_write");
+        var SSL_write = findExport(sslModules, "SSL_write");
         if (SSL_write) {
             Interceptor.attach(SSL_write, {
                 onEnter: function(args) {
@@ -55,7 +64,7 @@ SSL_HOOK_TEMPLATE = """
         }
 
         // Hook SSL_read
-        var SSL_read = Module.findExportByName("libssl.so", "SSL_read");
+        var SSL_read = findExport(sslModules, "SSL_read");
         if (SSL_read) {
             Interceptor.attach(SSL_read, {
                 onEnter: function(args) {
@@ -178,7 +187,7 @@ def register_tools(mcp):
         """
         try:
             _capture_active[session_id] = True
-            _capture_buffer.clear()
+            _capture_scripts[session_id] = []
 
             results = {"hooks": []}
 
@@ -188,6 +197,7 @@ def register_tools(mcp):
                 result = frida_client.execute_script(
                     session_id, source, script_name=hook_id
                 )
+                _capture_scripts[session_id].append(result["script_id"])
                 results["hooks"].append({
                     "hook_id": hook_id,
                     "type": "ssl",
@@ -200,6 +210,7 @@ def register_tools(mcp):
                 result = frida_client.execute_script(
                     session_id, source, script_name=hook_id
                 )
+                _capture_scripts[session_id].append(result["script_id"])
                 results["hooks"].append({
                     "hook_id": hook_id,
                     "type": "socket",
@@ -225,11 +236,23 @@ def register_tools(mcp):
         """
         try:
             _capture_active[session_id] = False
-            count = len(_capture_buffer)
+            scripts = _capture_scripts.pop(session_id, [])
+            unloaded = 0
+            for script_id in scripts:
+                if frida_client.unload_script(session_id, script_id):
+                    unloaded += 1
+            messages = frida_client.get_messages(session_id, clear=False)
+            count = sum(
+                1 for msg in messages
+                if msg.get("message", {}).get("type") in (
+                    "ssl_write", "ssl_read", "socket_connect", "socket_send", "socket_recv"
+                )
+            )
             return {
                 "success": True,
                 "session_id": session_id,
                 "captured_count": count,
+                "unloaded_scripts": unloaded,
             }
         except Exception as e:
             logger.error(f"stop_capture failed: {e}")

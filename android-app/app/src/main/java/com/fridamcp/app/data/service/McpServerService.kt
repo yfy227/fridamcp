@@ -598,8 +598,9 @@ class McpServerService : Service() {
                 }
 
                 "kill_process" -> {
-                    val pkg = args.optString("package_name")
-                    return textResult("Killed: $pkg\n${ShizukuManager.execShell("am force-stop $pkg")}")
+                    val pkg = requirePackageName(args.optString("package_name"))
+                    return textResult("Killed: $pkg
+${ShizukuManager.execShell("am force-stop ${shellQuote(pkg)}")}")
                 }
 
                 "check_injection" -> {
@@ -624,24 +625,25 @@ class McpServerService : Service() {
                     if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
                         return textResult("Error: 需要 Shizuku/Root 权限")
                     }
-                    val path = args.optString("path").replace("'", "'\''")
-                    return textResult(ShizukuManager.execShell("ls -la '$path'"))
+                    val path = shellQuote(args.optString("path"))
+                    return textResult(ShizukuManager.execShell("ls -la $path"))
                 }
 
                 "read_file" -> {
                     if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
                         return textResult("Error: 需要 Shizuku/Root 权限")
                     }
-                    val path = args.optString("path").replace("'", "'\''")
-                    return textResult(ShizukuManager.execShell("head -c ${args.optInt("max_size", 4096)} '$path' 2>&1 | cat -v"))
+                    val path = shellQuote(args.optString("path"))
+                    val maxSize = args.optInt("max_size", 4096).coerceIn(1, 1024 * 1024)
+                    return textResult(ShizukuManager.execShell("head -c $maxSize $path 2>&1 | cat -v"))
                 }
 
                 "get_app_info" -> {
                     if (ShizukuManager.currentMode == ShizukuManager.PermissionMode.NONE) {
                         return textResult("Error: 需要 Shizuku/Root 权限")
                     }
-                    val pkg = args.optString("package_name").replace("'", "'\''").replace(";", "").replace("|", "").replace("&", "")
-                    return textResult(ShizukuManager.execShell("dumpsys package '$pkg' | head -50"))
+                    val pkg = requirePackageName(args.optString("package_name"))
+                    return textResult(ShizukuManager.execShell("dumpsys package ${shellQuote(pkg)} | head -50"))
                 }
 
                 "ui_tap" -> {
@@ -658,10 +660,9 @@ class McpServerService : Service() {
                 }
 
                 "ui_input_text" -> {
-                    val text = args.optString("text")
-                    // 避免 shell 注入: 用 Base64 编码传递
-                    val b64 = android.util.Base64.encodeToString(text.toByteArray(), android.util.Base64.NO_WRAP)
-                    return textResult(ShizukuManager.execShell("echo '$b64' | base64 -d | xargs -0 input text"))
+                    val text = args.optString("text").replace(" ", "%s")
+                    val safeText = shellQuote(text)
+                    return textResult(ShizukuManager.execShell("input text $safeText"))
                 }
 
                 "ui_press_key" -> {
@@ -679,8 +680,8 @@ class McpServerService : Service() {
                 "get_logcat" -> {
                     val lines = args.optInt("lines", 100)
                     val filter = args.optString("filter", "")
-                    val safeFilter = filter.replace("'", "'\''").replace(";", "").replace("|", "").replace("&", "")
-                    val cmd = if (safeFilter.isNotBlank()) "logcat -d -t $lines | grep -i '$safeFilter'" else "logcat -d -t $lines"
+                    val safeLines = lines.coerceIn(1, 2000)
+                    val cmd = if (filter.isNotBlank()) "logcat -d -t $safeLines | grep -i -- ${shellQuote(filter)}" else "logcat -d -t $safeLines"
                     return textResult(ShizukuManager.execShell(cmd))
                 }
 

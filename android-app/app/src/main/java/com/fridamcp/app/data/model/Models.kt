@@ -127,12 +127,14 @@ data class InjectionTask(
 )
 
 enum class InjectionTaskStatus {
-    PENDING, INJECTING, SIGNING, DONE, ERROR;
+    PENDING, ANALYZING, INJECTING, SIGNING, INSTALLING, DONE, ERROR;
 
     val label: String get() = when (this) {
         PENDING -> "等待中"
+        ANALYZING -> "解析中"
         INJECTING -> "注入中"
         SIGNING -> "签名中"
+        INSTALLING -> "安装中"
         DONE -> "已完成"
         ERROR -> "失败"
     }

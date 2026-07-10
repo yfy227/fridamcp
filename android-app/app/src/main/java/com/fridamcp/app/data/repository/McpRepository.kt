@@ -62,6 +62,13 @@ class McpRepository(private val context: Context) {
     private val _tasks = MutableStateFlow<List<InjectionTask>>(emptyList())
     val tasks: StateFlow<List<InjectionTask>> = _tasks.asStateFlow()
 
+    init {
+        val prefs = context.getSharedPreferences("fridamcp_modules", Context.MODE_PRIVATE)
+        _modules.value = _modules.value.map { module ->
+            module.copy(enabled = prefs.getBoolean(module.name, module.enabled))
+        }
+    }
+
 /**
      * 启动 MCP 服务器 — 先启动服务，由服务回调确认状态
      * 不在这里假设成功
@@ -168,7 +175,7 @@ class McpRepository(private val context: Context) {
             apkPath = apkPath,
             appName = appName,
             packageName = packageName,
-            status = InjectionTaskStatus.INJECTING,
+            status = InjectionTaskStatus.PENDING,
             progress = 0,
             arch = arch,
             createdAt = System.currentTimeMillis(),

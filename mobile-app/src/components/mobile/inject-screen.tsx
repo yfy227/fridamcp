@@ -14,16 +14,18 @@ import {
   Info,
   ChevronRight,
 } from "lucide-react";
-import type { InjectionTask } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import type { InjectionOptions, InjectionTask } from "@/lib/types";
+import { basename, cn, isAndroidPackageName } from "@/lib/utils";
 
 interface InjectScreenProps {
   tasks: InjectionTask[];
-  onInject: (task: Omit<InjectionTask, "id" | "status" | "progress" | "createdAt">) => void;
+  onInject: (task: InjectionOptions) => void;
 }
 
 export function InjectScreen({ tasks, onInject }: InjectScreenProps) {
   const [selectedFile, setSelectedFile] = useState<string>("");
+  const [appName, setAppName] = useState("");
+  const [packageName, setPackageName] = useState("");
   const [arch, setArch] = useState("arm64-v8a");
   const [useApktool, setUseApktool] = useState(true);
   const [autoInstall, setAutoInstall] = useState(true);
@@ -37,33 +39,47 @@ export function InjectScreen({ tasks, onInject }: InjectScreenProps) {
     { value: "x86_64", label: "x86_64", desc: "64位模拟器" },
   ];
 
-  const handleInject = () => {
-    if (!selectedFile) return;
-    setInjecting(true);
-    const fileName = selectedFile.split("/").pop() || "unknown.apk";
-    const appName = fileName.replace(".apk", "").replace(/_/g, " ");
-    onInject({
-      apkPath: selectedFile,
-      appName,
-      packageName: `com.${appName.toLowerCase().replace(/\s/g, ".")}`,
-      arch,
-      useApktool,
-    });
-    setTimeout(() => {
-      setInjecting(false);
-      setSelectedFile("");
-    }, 3000);
+  const inferMeta = (path: string) => {
+    const fileName = basename(path).replace(/\.apk$/i, "");
+    const readableName = fileName.replace(/[._-]+/g, " ").trim();
+    if (!appName) setAppName(readableName || "Unknown APK");
+    if (!packageName) {
+      const candidate = fileName
+        .toLowerCase()
+        .replace(/^com[._-]/, "com.")
+        .replace(/[^a-z0-9._-]+/g, ".")
+        .replace(/[_-]+/g, ".")
+        .replace(/\.+/g, ".")
+        .replace(/^\.|\.$/g, "");
+      setPackageName(candidate.includes(".") ? candidate : `local.${candidate || "app"}`);
+    }
   };
 
-  const handleFileSelect = () => {
-    // 模拟文件选择
-    const mockFiles = [
-      "/storage/emulated/0/Download/com.example.demo.apk",
-      "/storage/emulated/0/Download/test_app.apk",
-      "/storage/emulated/0/Download/sample.apk",
-    ];
-    setSelectedFile(mockFiles[Math.floor(Math.random() * mockFiles.length)]);
+  const handleInject = async () => {
+    if (!canInject) return;
+    setInjecting(true);
+    await onInject({
+      apkPath: selectedFile,
+      appName,
+      packageName,
+      arch,
+      useApktool,
+      autoInstall,
+      autoScan,
+    });
+    setInjecting(false);
+    setSelectedFile("");
+    setAppName("");
+    setPackageName("");
   };
+
+  const handleFilePathChange = (value: string) => {
+    setSelectedFile(value);
+    if (/\.apk$/i.test(value)) inferMeta(value);
+  };
+
+  const packageNameValid = !packageName || isAndroidPackageName(packageName);
+  const canInject = Boolean(selectedFile) && /\.apk$/i.test(selectedFile) && packageNameValid && !injecting;
 
   return (
     <div className="px-4 pb-6 space-y-4 fade-in">
@@ -88,35 +104,28 @@ export function InjectScreen({ tasks, onInject }: InjectScreenProps) {
           选择 APK 文件
         </h3>
 
-        {selectedFile ? (
-          <div className="flex items-center gap-3 p-3 rounded-xl bg-muted/40">
-            <div className="w-10 h-10 rounded-lg bg-primary/15 flex items-center justify-center shrink-0">
-              <FileArchive className="w-5 h-5 text-primary" />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-foreground truncate">
-                {selectedFile.split("/").pop()}
-              </p>
-              <p className="text-[10px] text-muted-foreground font-mono truncate">
-                {selectedFile}
-              </p>
-            </div>
-            <button
-              onClick={() => setSelectedFile("")}
-              className="text-xs text-destructive hover:underline shrink-0"
-            >
-              更换
-            </button>
+        <div className="space-y-2">
+          <label className="text-xs text-muted-foreground">APK 路径</label>
+          <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-muted/30 border border-border">
+            <FileUp className="w-4 h-4 text-muted-foreground shrink-0" />
+            <input
+              value={selectedFile}
+              onChange={(event) => handleFilePathChange(event.target.value)}
+              placeholder="/storage/emulated/0/Download/target.apk"
+              className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none font-mono min-w-0"
+            />
           </div>
-        ) : (
-          <button
-            onClick={handleFileSelect}
-            className="w-full flex flex-col items-center justify-center gap-2 py-8 rounded-xl border-2 border-dashed border-border hover:border-primary/40 hover:bg-primary/5 transition-colors"
-          >
-            <FileUp className="w-8 h-8 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">点击选择 APK 文件</span>
-            <span className="text-[10px] text-muted-foreground/70">支持从文件管理器选择</span>
-          </button>
+          {selectedFile && !/\.apk$/i.test(selectedFile) && (
+            <p className="text-[10px] text-destructive">请选择 .apk 文件路径</p>
+          )}
+        </div>
+
+        {selectedFile && (
+          <div className="grid grid-cols-1 gap-2 pt-1">
+            <LabeledInput label="应用名" value={appName} onChange={setAppName} placeholder="自动从文件名推导，可修改" />
+            <LabeledInput label="包名" value={packageName} onChange={setPackageName} placeholder="com.example.app" mono />
+            {!packageNameValid && <p className="text-[10px] text-destructive">包名格式不合法，应类似 com.example.app</p>}
+          </div>
         )}
       </section>
 
@@ -180,10 +189,10 @@ export function InjectScreen({ tasks, onInject }: InjectScreenProps) {
       {/* 注入按钮 */}
       <button
         onClick={handleInject}
-        disabled={!selectedFile || injecting}
+        disabled={!canInject}
         className={cn(
           "w-full flex items-center justify-center gap-2 py-3.5 rounded-2xl font-semibold text-sm transition-all",
-          !selectedFile || injecting
+          !canInject
             ? "bg-muted text-muted-foreground"
             : "bg-primary text-primary-foreground hover:bg-primary/90 active:scale-[0.98]"
         )}
@@ -224,6 +233,36 @@ export function InjectScreen({ tasks, onInject }: InjectScreenProps) {
         </section>
       )}
     </div>
+  );
+}
+
+
+function LabeledInput({
+  label,
+  value,
+  onChange,
+  placeholder,
+  mono,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  mono?: boolean;
+}) {
+  return (
+    <label className="space-y-1">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <input
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className={cn(
+          "w-full px-3 py-2 rounded-xl bg-muted/30 border border-border text-xs text-foreground placeholder:text-muted-foreground outline-none focus:border-primary/40",
+          mono && "font-mono"
+        )}
+      />
+    </label>
   );
 }
 
@@ -281,7 +320,7 @@ function TaskCard({ task }: { task: InjectionTask }) {
         </span>
       </div>
 
-      {task.status === "injecting" || task.status === "signing" ? (
+      {["analyzing", "injecting", "signing", "installing"].includes(task.status) ? (
         <div className="space-y-1">
           <div className="h-1.5 rounded-full bg-muted overflow-hidden">
             <div
@@ -289,7 +328,7 @@ function TaskCard({ task }: { task: InjectionTask }) {
               style={{ width: `${task.progress}%` }}
             />
           </div>
-          <p className="text-[10px] text-muted-foreground">{task.progress}% · {task.status === "injecting" ? "注入中" : "签名中"}</p>
+          <p className="text-[10px] text-muted-foreground">{task.progress}% · {statusConfig.label}</p>
         </div>
       ) : null}
 
@@ -317,10 +356,14 @@ function getTaskStatusConfig(status: InjectionTask["status"]) {
   switch (status) {
     case "done":
       return { icon: CheckCircle2, label: "完成", color: "text-primary", bgColor: "bg-primary/10" };
+    case "analyzing":
+      return { icon: Loader2, label: "解析中", color: "text-sky-400", bgColor: "bg-sky-400/10" };
     case "injecting":
       return { icon: Loader2, label: "注入中", color: "text-primary", bgColor: "bg-primary/10" };
     case "signing":
       return { icon: Loader2, label: "签名中", color: "text-amber-400", bgColor: "bg-amber-400/10" };
+    case "installing":
+      return { icon: Loader2, label: "安装中", color: "text-amber-400", bgColor: "bg-amber-400/10" };
     case "error":
       return { icon: AlertCircle, label: "失败", color: "text-destructive", bgColor: "bg-destructive/10" };
     default:

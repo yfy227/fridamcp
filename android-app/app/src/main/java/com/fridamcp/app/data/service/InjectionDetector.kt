@@ -103,7 +103,8 @@ class InjectionDetector(private val context: Context) {
     fun detectProcess(packageName: String): DetectionResult {
         try {
             // Android 10+ 限制 /proc 访问, 先尝试 Shizuku/Root
-            val pidResult = com.fridamcp.app.data.service.ShizukuManager.execShell("pidof $packageName 2>/dev/null")
+            val safePackage = requirePackageName(packageName)
+            val pidResult = ShizukuManager.execShell("pidof ${shellQuote(safePackage)} 2>/dev/null")
             val pid = pidResult.trim().split("\n")[0].trim().toIntOrNull()
 
             if (pid != null && pid > 0) {
@@ -131,7 +132,7 @@ class InjectionDetector(private val context: Context) {
             for (procDir in processDirs) {
                 try {
                     val cmdline = File(procDir, "cmdline").readText().trimEnd('\u0000')
-                    if (cmdline == packageName) {
+                    if (cmdline == safePackage) {
                         val foundPid = procDir.name.toInt()
                         val result = detectRuntime(foundPid)
                         if (result.detected) return result
@@ -148,7 +149,7 @@ class InjectionDetector(private val context: Context) {
         return DetectionResult(
             detected = false,
             method = DetectionMethod.NONE,
-            details = "未找到运行中的 $packageName 进程",
+            details = "未找到运行中的 ${packageName} 进程",
         )
     }
 
@@ -168,7 +169,7 @@ class InjectionDetector(private val context: Context) {
     private fun extractGadgetVersion(zip: ZipFile, entryName: String): String? {
         // Parse version from filename: libfrida-gadget-16.5.1-android-arm64.so
         val match = Regex("""frida-gadget-(\d+\.\d+\.\d+)""").find(entryName)
-        return match?.groupValues?.getOrNull(1)
+        return match?.groupValues?.getOrNull(1) ?: Regex("""frida-(\d+\.\d+\.\d+)""").find(entryName)?.groupValues?.getOrNull(1)
     }
 
     data class DetectionResult(

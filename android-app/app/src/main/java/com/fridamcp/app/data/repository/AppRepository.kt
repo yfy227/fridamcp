@@ -21,12 +21,24 @@ class AppRepository(val context: Context) {
     private val detector = InjectionDetector(context)
     private var colorIndex = 0
 
+    private fun packageVersionCode(pkgInfo: android.content.pm.PackageInfo?): Long {
+        if (pkgInfo == null) return 1L
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            pkgInfo.longVersionCode
+        } else {
+            @Suppress("DEPRECATION")
+            val legacyVersionCode = pkgInfo.versionCode.toLong()
+            legacyVersionCode
+        }
+    }
+
     /** Load real installed apps from PackageManager */
     fun loadInstalledApps() {
         _scanning.value = true
         try {
             val pm = context.packageManager
             val packages = pm.getInstalledApplications(0)
+            colorIndex = 0
             val appList = packages.mapIndexed { index, appInfo ->
                 val pkgInfo = try {
                     pm.getPackageInfo(appInfo.packageName, 0)
@@ -57,7 +69,7 @@ class AppRepository(val context: Context) {
                     packageName = appInfo.packageName,
                     appName = pm.getApplicationLabel(appInfo).toString(),
                     version = pkgInfo?.versionName ?: "unknown",
-                    versionCode = pkgInfo?.let { it.versionCode.toLong() } ?: 1L,
+                    versionCode = packageVersionCode(pkgInfo),
                     iconColor = color,
                     iconText = pm.getApplicationLabel(appInfo).toString().firstOrNull()?.toString() ?: "?",
                     isSystem = isSystem,
@@ -109,12 +121,19 @@ class AppRepository(val context: Context) {
     }
 
     /** Update app status (e.g., after launch or MCP toggle) */
-    fun updateAppStatus(packageName: String, status: InjectionStatus, mcpStatus: MCPServiceStatus? = null) {
+    fun updateAppStatus(packageName: String, status: InjectionStatus, mcpStatus: MCPServiceStatus? = null, pid: Int? = null, clearMcp: Boolean = false) {
         _apps.value = _apps.value.map { app ->
             if (app.packageName == packageName) {
                 app.copy(
                     injectionStatus = status,
-                    mcpStatus = mcpStatus ?: app.mcpStatus,
+                    mcpStatus = if (clearMcp) null else (mcpStatus ?: app.mcpStatus),
+                    pid = pid ?: if (status == InjectionStatus.RUNNING) app.pid else null,
+                    lastScanTime = System.currentTimeMillis(),
+                    detectionMethod = when (status) {
+                        InjectionStatus.RUNNING -> DetectionMethod.RUNTIME
+                        InjectionStatus.INJECTED -> DetectionMethod.STATIC
+                        else -> DetectionMethod.NONE
+                    },
                 )
             } else app
         }

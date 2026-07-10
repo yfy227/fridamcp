@@ -222,7 +222,8 @@ class FridaInjector(private val context: Context) {
         }
 
         // 4. 获取目标进程 PID
-        val pidResult = ShizukuManager.execShell("pidof $packageName")
+        val safePackage = requirePackageName(packageName)
+        val pidResult = ShizukuManager.execShell("pidof ${shellQuote(safePackage)}")
         val pid = pidResult.trim().split("\n")[0].trim().toIntOrNull()
         if (pid == null || pid <= 0) {
             return InjectionResult.Error(
@@ -233,17 +234,18 @@ class FridaInjector(private val context: Context) {
 
         // 5. 写入脚本到临时文件
         val tmpScript = "/data/local/tmp/frida_script_${System.currentTimeMillis()}.js"
-        ShizukuManager.execShell("cat > '$tmpScript' << 'FRIDASCRIPT_EOF'\n$script\nFRIDASCRIPT_EOF")
+        val scriptB64 = android.util.Base64.encodeToString(script.toByteArray(), android.util.Base64.NO_WRAP)
+        ShizukuManager.execShell("printf %s ${shellQuote(scriptB64)} | base64 -d > ${shellQuote(tmpScript)}")
 
         // 6. 执行注入
         // frida-inject -p PID -s script.js
         // 参考: https://frida.re/docs/android/
         val result = ShizukuManager.execShell(
-            "timeout $timeout $FRIDA_INJECT -p $pid -s '$tmpScript' 2>&1"
+            "timeout ${timeout.coerceIn(1, 120)} $FRIDA_INJECT -p $pid -s ${shellQuote(tmpScript)} 2>&1"
         )
 
         // 7. 清理
-        ShizukuManager.execShell("rm -f '$tmpScript'")
+        ShizukuManager.execShell("rm -f ${shellQuote(tmpScript)}")
 
         Log.i(TAG, "Inject result for $packageName (PID=$pid): ${result.take(200)}")
 
@@ -273,14 +275,16 @@ class FridaInjector(private val context: Context) {
             return InjectionResult.Error("frida-inject 未安装")
         }
 
+        val safePackage = requirePackageName(packageName)
         val tmpScript = "/data/local/tmp/frida_spawn_${System.currentTimeMillis()}.js"
-        ShizukuManager.execShell("cat > '$tmpScript' << 'FRIDASCRIPT_EOF'\n$script\nFRIDASCRIPT_EOF")
+        val scriptB64 = android.util.Base64.encodeToString(script.toByteArray(), android.util.Base64.NO_WRAP)
+        ShizukuManager.execShell("printf %s ${shellQuote(scriptB64)} | base64 -d > ${shellQuote(tmpScript)}")
 
         // -f = spawn, --no-pause = 自动 resume
         val result = ShizukuManager.execShell(
-            "timeout $timeout $FRIDA_INJECT -f $packageName -s '$tmpScript' --no-pause 2>&1"
+            "timeout ${timeout.coerceIn(1, 120)} $FRIDA_INJECT -f ${shellQuote(safePackage)} -s ${shellQuote(tmpScript)} --no-pause 2>&1"
         )
-        ShizukuManager.execShell("rm -f '$tmpScript'")
+        ShizukuManager.execShell("rm -f ${shellQuote(tmpScript)}")
 
         return InjectionResult.Success(result, 0)
     }

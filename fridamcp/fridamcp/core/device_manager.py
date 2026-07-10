@@ -114,7 +114,7 @@ class DeviceManager:
                 self._device.query_system_parameters()
 
                 self._device_type = dtype
-                self._device_id = did
+                self._device_id = self._normalise_device_id(dtype, did)
                 self._connected_at = time.time()
                 self._reconnect_count = attempt - 1
 
@@ -138,8 +138,14 @@ class DeviceManager:
         )
 
     def _is_same_target(self, dtype: str, did: Optional[str]) -> bool:
-        """检查目标设备是否与当前连接一致"""
-        return self._device_type == dtype and self._device_id == did
+        """检查目标设备是否与当前连接一致。"""
+        return self._device_type == dtype and self._device_id == self._normalise_device_id(dtype, did)
+
+    def _normalise_device_id(self, dtype: str, did: Optional[str]) -> Optional[str]:
+        """规范化缓存中的设备标识。"""
+        if dtype == "remote":
+            return f"{config.FRIDA_REMOTE_HOST}:{config.FRIDA_REMOTE_PORT}"
+        return did
 
     def get_current_device(self) -> Optional[frida.core.Device]:
         """获取当前已连接的设备（不触发重连）
@@ -195,11 +201,17 @@ class DeviceManager:
             return False
 
     def refresh(self) -> frida.core.Device:
-        """刷新设备连接（强制重新连接）"""
+        """刷新设备连接（强制重新连接）。
+
+        remote 连接的缓存 ID 是 host:port，不能作为 device_id 传回
+        get_device；local/usb 且未显式指定 ID 时也应保持 device_id=None。
+        """
         with self._lock:
+            dtype = self._device_type or config.FRIDA_DEVICE_TYPE
+            did = self._device_id if dtype != "remote" else None
             self._device = None
             self._connected_at = None
-        return self.get_device(self._device_type, self._device_id)
+        return self.get_device(device_id=did, device_type=dtype)
 
     def get_status(self) -> Dict[str, Any]:
         """获取设备管理器状态"""

@@ -54,7 +54,7 @@ class Session:
         self.detached_at: Optional[float] = None
         # 错误信息
         self.last_error: Optional[str] = None
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def attach(self, device: frida.core.Device):
         """附加到进程"""
@@ -161,10 +161,9 @@ class Session:
                 return False
 
     def unload_all_scripts(self):
-        """卸载所有脚本"""
-        with self._lock:
-            for sid in list(self.scripts.keys()):
-                self.unload_script(sid)
+        """卸载所有脚本，避免持锁重入导致死锁。"""
+        for sid in list(self.scripts.keys()):
+            self.unload_script(sid)
 
     def get_messages(self, clear: bool = False) -> list:
         """获取所有消息"""
@@ -261,25 +260,29 @@ class SessionManager:
             session_id = f"sess_{uuid.uuid4().hex[:8]}"
             session = Session(session_id, pid, name or f"pid_{pid}")
 
-            device = device_manager.get_current_device()
-            if device is None:
-                device = device_manager.get_device()
+        device = device_manager.get_current_device()
+        if device is None:
+            device = device_manager.get_device()
 
-            session.attach(device)
+        session.attach(device)
+
+        with self._lock:
             self._sessions[session_id] = session
-            logger.info(f"Created session {session_id} for pid={pid}")
-            return session
+        logger.info(f"Created session {session_id} for pid={pid}")
+        return session
 
     def get_session(self, session_id: str) -> Optional[Session]:
         """获取会话"""
-        return self._sessions.get(session_id)
+        with self._lock:
+            return self._sessions.get(session_id)
 
     def get_active_session(self, session_id: str) -> Optional[Session]:
         """获取活动状态的会话
 
         如果会话已分离，返回 None 并记录警告。
         """
-        session = self._sessions.get(session_id)
+        with self._lock:
+            session = self._sessions.get(session_id)
         if session is None:
             logger.warning(f"Session not found: {session_id}")
             return None
@@ -292,7 +295,8 @@ class SessionManager:
 
     def list_sessions(self) -> List[Dict[str, Any]]:
         """列出所有会话"""
-        return [s.get_info() for s in self._sessions.values()]
+        with self._lock:
+            return [s.get_info() for s in self._sessions.values()]
 
     def close_session(self, session_id: str) -> bool:
         """关闭会话"""
@@ -331,13 +335,15 @@ class SessionManager:
 
     def get_status(self) -> Dict[str, Any]:
         """获取会话管理器状态"""
-        active_count = sum(1 for s in self._sessions.values() if s.is_active())
+        with self._lock:
+            sessions = list(self._sessions.values())
+        active_count = sum(1 for s in sessions if s.is_active())
         detached_count = sum(
-            1 for s in self._sessions.values()
+            1 for s in sessions
             if s.state == SessionState.DETACHED
         )
         return {
-            "total_sessions": len(self._sessions),
+            "total_sessions": len(sessions),
             "active_sessions": active_count,
             "detached_sessions": detached_count,
             "max_sessions": config.MAX_SESSIONS,

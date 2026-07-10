@@ -11,14 +11,15 @@ from typing import Dict, Any, List, Optional
 from ..core.frida_client import frida_client
 from ..core.session_manager import session_manager
 from ..utils.logger import logger
+from ..utils.js import js_string
 
 
 # Hook 脚本模板
 HOOK_JAVA_METHOD_TEMPLATE = """
 (function() {
-    var hookId = "%(hook_id)s";
-    var className = "%(class_name)s";
-    var methodName = "%(method_name)s";
+    var hookId = %(hook_id)s;
+    var className = %(class_name)s;
+    var methodName = %(method_name)s;
 
     rpc.exports = {
         info: function() {
@@ -84,9 +85,9 @@ HOOK_JAVA_METHOD_TEMPLATE = """
 
 HOOK_NATIVE_TEMPLATE = """
 (function() {
-    var hookId = "%(hook_id)s";
-    var moduleName = "%(module_name)s";
-    var funcName = "%(func_name)s";
+    var hookId = %(hook_id)s;
+    var moduleName = %(module_name)s;
+    var funcName = %(func_name)s;
     var offset = %(offset)s;
 
     rpc.exports = {
@@ -138,8 +139,8 @@ HOOK_NATIVE_TEMPLATE = """
 
 TRACE_METHOD_TEMPLATE = """
 (function() {
-    var hookId = "%(hook_id)s";
-    var className = "%(class_name)s";
+    var hookId = %(hook_id)s;
+    var className = %(class_name)s;
 
     rpc.exports = {
         info: function() {
@@ -215,9 +216,9 @@ def register_tools(mcp):
         try:
             hook_id = f"hook_{uuid.uuid4().hex[:8]}"
             source = HOOK_JAVA_METHOD_TEMPLATE % {
-                "hook_id": hook_id,
-                "class_name": class_name,
-                "method_name": method_name,
+                "hook_id": js_string(hook_id),
+                "class_name": js_string(class_name),
+                "method_name": js_string(method_name),
             }
             result = frida_client.execute_script(
                 session_id, source, script_name=hook_id
@@ -265,12 +266,14 @@ def register_tools(mcp):
             包含 hook_id 和 script_id 的字典
         """
         try:
+            if not func_name and offset <= 0:
+                return {"error": "Either func_name or a positive offset is required"}
             hook_id = f"native_{uuid.uuid4().hex[:8]}"
             source = HOOK_NATIVE_TEMPLATE % {
-                "hook_id": hook_id,
-                "module_name": module_name,
-                "func_name": func_name or "",
-                "offset": offset,
+                "hook_id": js_string(hook_id),
+                "module_name": js_string(module_name),
+                "func_name": js_string(func_name or ""),
+                "offset": int(offset),
             }
             result = frida_client.execute_script(
                 session_id, source, script_name=hook_id
@@ -318,8 +321,8 @@ def register_tools(mcp):
         try:
             hook_id = f"trace_{uuid.uuid4().hex[:8]}"
             source = TRACE_METHOD_TEMPLATE % {
-                "hook_id": hook_id,
-                "class_name": class_name,
+                "hook_id": js_string(hook_id),
+                "class_name": js_string(class_name),
             }
             result = frida_client.execute_script(
                 session_id, source, script_name=hook_id
