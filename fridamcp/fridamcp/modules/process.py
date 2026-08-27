@@ -221,7 +221,7 @@ def register_tools(mcp):
                 "sessions": session_manager.get_status(),
                 "server_info": {
                     "name": "FridaMCP",
-                    "version": "1.0.0",
+                    "version": "3.0.0",
                     "port": config.MCP_PORT,
                 },
             }
@@ -251,6 +251,48 @@ def register_tools(mcp):
             }
         except Exception as e:
             logger.error(f"reconnect_device failed: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def reconnect_session(session_id: str) -> Dict[str, Any]:
+        """重连已分离的会话
+
+        当会话因进程崩溃或其他原因分离时，尝试重新附加到同一进程。
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            操作结果
+        """
+        try:
+            return frida_client.reconnect_session(session_id)
+        except Exception as e:
+            logger.error(f"reconnect_session failed: {e}")
+            return {"error": str(e)}
+
+    @mcp.tool()
+    def execute_frida_script(session_id: str, script_source: str) -> Dict[str, Any]:
+        """执行自定义 Frida JavaScript 脚本
+
+        高级功能：直接执行任意 Frida JS 脚本。
+
+        Args:
+            session_id: 会话 ID
+            script_source: Frida JavaScript 脚本源码
+
+        Returns:
+            包含 script_id 的字典
+        """
+        try:
+            import uuid as _uuid
+            script_name = f"custom_{_uuid.uuid4().hex[:8]}"
+            result = frida_client.execute_script(
+                session_id, script_source, script_name=script_name
+            )
+            return result
+        except Exception as e:
+            logger.error(f"execute_frida_script failed: {e}")
             return {"error": str(e)}
 
     logger.info("Process module tools registered")

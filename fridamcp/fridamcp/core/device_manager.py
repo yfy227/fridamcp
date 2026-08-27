@@ -32,7 +32,39 @@ class DeviceManager:
             cls._instance._device_id = None
             cls._instance._connected_at = None
             cls._instance._reconnect_count = 0
+            cls._instance._heartbeat_thread = None
+            cls._instance._heartbeat_running = False
+            cls._instance._last_heartbeat = None
         return cls._instance
+
+    def _start_heartbeat(self):
+        """启动心跳检测线程"""
+        if self._heartbeat_running:
+            return
+
+        def _heartbeat_loop():
+            while self._heartbeat_running:
+                try:
+                    if self._device is not None:
+                        self._device.query_system_parameters()
+                        self._last_heartbeat = time.time()
+                    time.sleep(config.SESSION_KEEPALIVE_INTERVAL)
+                except Exception as e:
+                    logger.warning(f"Heartbeat failed: {e}, marking device as disconnected")
+                    self._device = None
+                    self._heartbeat_running = False
+                    # 尝试自动重连
+                    try:
+                        self.get_device(self._device_type, self._device_id)
+                        self._heartbeat_running = True
+                    except Exception:
+                        pass
+                    break
+
+        self._heartbeat_running = True
+        self._heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
+        logger.info("Device heartbeat started")
 
     @classmethod
     def get_instance(cls) -> "DeviceManager":
@@ -122,6 +154,9 @@ class DeviceManager:
                     f"Using device: {self._device.name} "
                     f"(id={self._device.id}, type={self._device.type})"
                 )
+                # 启动心跳检测
+                if config.SESSION_KEEPALIVE_INTERVAL > 0:
+                    self._start_heartbeat()
                 return self._device
 
             except Exception as e:
@@ -189,6 +224,7 @@ class DeviceManager:
 
     def refresh(self) -> frida.core.Device:
         """刷新设备连接（强制重新连接）"""
+        self._heartbeat_running = False
         with self._lock:
             self._device = None
             self._connected_at = None
@@ -202,6 +238,8 @@ class DeviceManager:
             "device_id": self._device_id,
             "connected_at": self._connected_at,
             "reconnect_count": self._reconnect_count,
+            "last_heartbeat": self._last_heartbeat,
+            "heartbeat_active": self._heartbeat_running,
         }
 
 

@@ -25,6 +25,14 @@ class Config:
     # MCP 服务器路径
     MCP_PATH: str = "/mcp"
 
+    # ===== GUI 配置 =====
+    GUI_HOST: str = field(
+        default_factory=lambda: os.getenv("FRIDAMCP_GUI_HOST", "0.0.0.0")
+    )
+    GUI_PORT: int = field(
+        default_factory=lambda: int(os.getenv("FRIDAMCP_GUI_PORT", "7860"))
+    )
+
     # ===== 持久性与可靠性配置 =====
     # 设备重连最大重试次数
     DEVICE_RECONNECT_MAX_RETRIES: int = field(

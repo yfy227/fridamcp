@@ -224,6 +224,13 @@ class FridaClient:
         """关闭会话"""
         return session_manager.close_session(session_id)
 
+    def reconnect_session(self, session_id: str) -> Dict[str, Any]:
+        """重连已分离的会话"""
+        session = session_manager.reconnect_session(session_id)
+        if session is None:
+            return {"error": f"Failed to reconnect session: {session_id}"}
+        return session.get_info()
+
     # ============ 设备信息 ============
 
     def get_device_info(self) -> Dict[str, Any]:

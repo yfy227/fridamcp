@@ -304,6 +304,55 @@ class SessionManager:
             del self._sessions[session_id]
             return True
 
+    def reconnect_session(self, session_id: str) -> Optional[Session]:
+        """重连已分离的会话
+
+        尝试重新附加到同一进程。如果进程已退出则返回 None。
+
+        Args:
+            session_id: 会话 ID
+
+        Returns:
+            重连后的 Session 对象，失败返回 None
+        """
+        with self._lock:
+            session = self._sessions.get(session_id)
+            if session is None:
+                return None
+
+            if session.is_active():
+                logger.info(f"Session {session_id} is already active")
+                return session
+
+            logger.info(f"Reconnecting session {session_id} to pid={session.pid}")
+
+            try:
+                device = device_manager.get_current_device()
+                if device is None:
+                    device = device_manager.get_device()
+
+                # 清理旧状态
+                session.scripts.clear()
+                session.hooks.clear()
+                session.messages.clear()
+
+                # 重新附加
+                session.session = device.attach(session.pid)
+                session.session.on("detached", session._on_detached)
+                session.state = SessionState.ATTACHED
+                session.attached_at = time.time()
+                session.detach_reason = None
+                session.last_error = None
+
+                logger.info(f"Session {session_id} reconnected to pid={session.pid}")
+                return session
+
+            except Exception as e:
+                session.state = SessionState.ERROR
+                session.last_error = str(e)
+                logger.error(f"Failed to reconnect session {session_id}: {e}")
+                return None
+
     def _cleanup_detached(self):
         """清理已分离的会话"""
         detached_ids = [

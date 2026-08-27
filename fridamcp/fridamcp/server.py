@@ -70,7 +70,7 @@ def create_mcp_server():
         """
         return {
             "name": "FridaMCP",
-            "version": "1.0.0",
+            "version": "3.0.0",
             "port": config.MCP_PORT,
             "host": config.MCP_HOST,
             "modules": registered_modules,
@@ -182,7 +182,7 @@ def _create_basic_server():
             import json
             info = {
                 "name": "FridaMCP",
-                "version": "1.0.0",
+                "version": "3.0.0",
                 "port": config.MCP_PORT,
                 "note": "Running in basic mode (FastMCP not available)",
             }
