@@ -34,6 +34,7 @@ from fridamcp.core.frida_client import frida_client
 # MCP 服务器后台线程
 _mcp_thread = None
 _mcp_running = False
+_mcp_loop: "asyncio.AbstractEventLoop | None" = None
 
 
 # ============================================================
@@ -47,16 +48,41 @@ def start_mcp_server_background(host="0.0.0.0", port=8768, transport="sse"):
         return "MCP 服务器已在运行中"
 
     def _run():
-        global _mcp_running
+        global _mcp_running, _mcp_loop
         try:
             from fridamcp.server import create_mcp_server, run_sse_server, run_streamable_http_server
             mcp = create_mcp_server()
             _mcp_running = True
             logger.info(f"MCP server starting on {host}:{port} ({transport})")
-            if transport == "sse":
-                asyncio.run(run_sse_server(mcp, host, port))
-            elif transport == "http":
-                asyncio.run(run_streamable_http_server(mcp, host, port))
+
+            # 手动管理事件循环，以便 GUI 可以请求停止（loop.stop()）
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            _mcp_loop = loop
+            try:
+                if transport == "http":
+                    coro = run_streamable_http_server(mcp, host, port)
+                else:
+                    coro = run_sse_server(mcp, host, port)
+                loop.run_until_complete(coro)
+            except RuntimeError:
+                # loop.stop() 从 GUI 线程调用：run_until_complete 中断，
+                # 剩余任务在下方统一取消
+                logger.info("MCP server loop interrupted by stop request")
+            finally:
+                # 优雅清理：取消残留任务并关闭循环
+                try:
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(
+                            asyncio.gather(*pending, return_exceptions=True)
+                        )
+                except Exception:
+                    pass
+                loop.close()
+                _mcp_loop = None
         except Exception as e:
             logger.error(f"MCP server error: {e}")
         finally:
@@ -65,14 +91,24 @@ def start_mcp_server_background(host="0.0.0.0", port=8768, transport="sse"):
     _mcp_thread = threading.Thread(target=_run, daemon=True)
     _mcp_thread.start()
     time.sleep(1)
-    return f"MCP 服务器已启动: {host}:{port} ({transport})"
+    # 根据 _mcp_running 判定真实启动结果，避免启动失败仍报“已启动”
+    if _mcp_running:
+        return f"MCP 服务器已启动: {host}:{port} ({transport})"
+    return "MCP 服务器启动失败，请检查日志（frida/mcp 依赖是否安装）"
 
 
 def stop_mcp_server():
-    """停止 MCP 服务器"""
+    """停止 MCP 服务器
+
+    通过 loop.stop() 真正中断事件循环（原实现仅翻转标志位，
+    asyncio.run() 中的服务器会继续监听端口，属于假停止）。
+    """
     global _mcp_running
-    if not _mcp_running:
+    loop = _mcp_loop
+    if not _mcp_running and loop is None:
         return "MCP 服务器未运行"
+    if loop is not None and loop.is_running():
+        loop.call_soon_threadsafe(loop.stop)
     _mcp_running = False
     session_manager.close_all()
     return "MCP 服务器已停止（会话已清理）"

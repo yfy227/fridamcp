@@ -54,7 +54,9 @@ class Session:
         self.detached_at: Optional[float] = None
         # 错误信息
         self.last_error: Optional[str] = None
-        self._lock = threading.Lock()
+        # 可重入锁：unload_all_scripts() 持锁期间会调用
+        # unload_script()（同样需要加锁），普通 Lock 会死锁
+        self._lock = threading.RLock()
 
     def attach(self, device: frida.core.Device):
         """附加到进程"""

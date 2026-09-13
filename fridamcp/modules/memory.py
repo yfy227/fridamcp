@@ -16,8 +16,15 @@ MEMORY_READ_TEMPLATE = """
     rpc.exports = {
         read: function(address, size) {
             try {
-                var ptr = new Ptr(address);
-                var bytes = Memory.readByteArray(ptr, size);
+                // NOTE: use the global ptr() helper; there is no Ptr
+                // constructor in the Frida JS runtime (new Ptr() throws
+                // ReferenceError). Also avoid naming the variable "ptr"
+                // because it would shadow the global function.
+                var p = ptr(address);
+                var bytes = Memory.readByteArray(p, size);
+                if (bytes === null) {
+                    return { error: "Memory.readByteArray returned null (unreadable range?) address=" + address };
+                }
                 return Array.from(new Uint8Array(bytes)).map(function(b) {
                     return ('00' + b.toString(16)).slice(-2);
                 }).join('');
@@ -34,16 +41,12 @@ MEMORY_WRITE_TEMPLATE = """
     rpc.exports = {
         write: function(address, hexData) {
             try {
-                var ptr = new Ptr(address);
+                var p = ptr(address);
                 var bytes = [];
                 for (var i = 0; i < hexData.length; i += 2) {
                     bytes.push(parseInt(hexData.substr(i, 2), 16));
                 }
-                var buf = Memory.allocUtf8String("");
-                for (var i = 0; i < bytes.length; i++) {
-                    buf.add(i).writeU8(bytes[i]);
-                }
-                Memory.copy(ptr, buf, bytes.length);
+                p.writeByteArray(bytes);
                 return { success: true, written: bytes.length };
             } catch(e) {
                 return { error: e.message };
