@@ -4,9 +4,9 @@
 提供应用日志捕获、Frida 脚本日志、logcat 日志等工具。
 """
 
+import atexit
 import subprocess
 import threading
-import time
 from collections import deque
 from typing import Dict, Any, List, Optional
 
@@ -15,17 +15,24 @@ from ..config import config
 from ..utils.logger import logger, get_log_buffer, clear_log_buffer
 
 
-# logcat 捕获状态
+# logcat 捕获状态（所有访问必须持有 _logcat_lock）
+# RLock：start_log 持锁期间会调用 _stop_logcat（同样需要加锁）
+# 清理已死亡的进程，普通 Lock 会死锁
+_logcat_lock = threading.RLock()
 _logcat_processes: Dict[str, subprocess.Popen] = {}
 _logcat_buffers: Dict[str, deque] = {}
+_logcat_threads: Dict[str, threading.Thread] = {}
 
 
 def _start_logcat(
     session_id: str,
     package: Optional[str] = None,
     device: Optional[str] = None,
-):
-    """启动 logcat 捕获"""
+) -> subprocess.Popen:
+    """启动 logcat 捕获
+
+    由调用方保证持有 _logcat_lock 且 key 不在运行表中。
+    """
     args = ["adb"]
     if device:
         args.extend(["-s", device])
@@ -46,10 +53,12 @@ def _start_logcat(
         except Exception:
             pass
 
+    # stderr 丢弃：若保持 PIPE 而无人读取，adb 写满管道缓冲区后
+    # 会永久阻塞（经典 subprocess 陷阱）
     proc = subprocess.Popen(
         args,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
         text=True,
         bufsize=1,
     )
@@ -59,12 +68,68 @@ def _start_logcat(
     def reader():
         try:
             for line in proc.stdout:
-                _logcat_buffers[session_id].append(line.rstrip())
+                # stop_log 清理后 buffer 可能已移除：.get 防御，
+                # 避免清理竞态导致 reader 以 KeyError 崩掉
+                buf = _logcat_buffers.get(session_id)
+                if buf is None:
+                    break
+                buf.append(line.rstrip())
         except Exception as e:
             logger.error(f"logcat reader error: {e}")
 
     t = threading.Thread(target=reader, daemon=True)
+    _logcat_threads[session_id] = t
     t.start()
+    return proc
+
+
+def _stop_logcat(key: str) -> int:
+    """停止并清理一个 logcat 捕获（线程安全）
+
+    清理顺序：进程(terminate→kill) → reader 线程(join) → buffer。
+    返回停止前捕获的行数。
+    """
+    with _logcat_lock:
+        proc = _logcat_processes.pop(key, None)
+        if proc is not None:
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        pass
+            except Exception as e:
+                logger.warning(f"logcat terminate error: {e}")
+
+        t = _logcat_threads.pop(key, None)
+        if t is not None and t.is_alive():
+            t.join(timeout=3)
+
+        buf = _logcat_buffers.pop(key, None)
+        return len(buf) if buf else 0
+
+
+def _sweep_dead_logcat():
+    """清理已自然退出的 logcat 条目（设备拔出时 adb 会自杀）"""
+    for key in list(_logcat_processes.keys()):
+        proc = _logcat_processes.get(key)
+        if proc is not None and proc.poll() is not None:
+            logger.info(f"logcat for {key} exited (code={proc.returncode}), sweeping")
+            _stop_logcat(key)
+
+
+@atexit.register
+def _cleanup_all_logcat():
+    """进程退出兜底：不留孤儿 adb logcat 进程"""
+    for key in list(_logcat_processes.keys()):
+        try:
+            _stop_logcat(key)
+        except Exception:
+            pass
 
 
 def register_tools(mcp):
@@ -88,9 +153,16 @@ def register_tools(mcp):
         """
         try:
             key = session_id or "default"
-            if key in _logcat_processes:
-                return {"error": "Log already running for this session"}
-            _start_logcat(key, package, device)
+            with _logcat_lock:
+                # 先清理已自然死亡的条目：设备拔出后 adb logcat 自杀，
+                # 旧实现只查字典存在性，导致永远无法重新开始捕获
+                existing = _logcat_processes.get(key)
+                if existing is not None and existing.poll() is not None:
+                    _stop_logcat(key)
+                    existing = None
+                if existing is not None or key in _logcat_processes:
+                    return {"error": "Log already running for this session"}
+                _start_logcat(key, package, device)
             return {
                 "success": True,
                 "session_id": key,
@@ -121,15 +193,19 @@ def register_tools(mcp):
         """
         try:
             key = session_id or "default"
-            buf = _logcat_buffers.get(key)
-            if buf is None:
-                return {"error": "No log capture for this session"}
-            lines = list(buf)
+            with _logcat_lock:
+                buf = _logcat_buffers.get(key)
+                if buf is None:
+                    return {"error": "No log capture for this session"}
+                lines = list(buf)
             if filter_text:
                 lines = [l for l in lines if filter_text in l]
             lines = lines[-max_lines:]
             if clear:
-                buf.clear()
+                with _logcat_lock:
+                    buf = _logcat_buffers.get(key)
+                    if buf is not None:
+                        buf.clear()
             return {
                 "session_id": key,
                 "count": len(lines),
@@ -151,15 +227,7 @@ def register_tools(mcp):
         """
         try:
             key = session_id or "default"
-            proc = _logcat_processes.pop(key, None)
-            if proc:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-            buf = _logcat_buffers.pop(key, None)
-            count = len(buf) if buf else 0
+            count = _stop_logcat(key)
             return {"success": True, "session_id": key, "captured_count": count}
         except Exception as e:
             logger.error(f"stop_log failed: {e}")
@@ -230,8 +298,9 @@ def register_tools(mcp):
         """
         try:
             clear_log_buffer()
-            for buf in _logcat_buffers.values():
-                buf.clear()
+            with _logcat_lock:
+                for buf in _logcat_buffers.values():
+                    buf.clear()
             return {"success": True}
         except Exception as e:
             logger.error(f"clear_all_logs failed: {e}")
