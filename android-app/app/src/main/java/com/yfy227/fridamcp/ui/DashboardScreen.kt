@@ -79,7 +79,7 @@ private fun StatusCard(s: JSONObject) {
             val device = s.optJSONObject("device") ?: JSONObject()
             val dev = device.optJSONObject("device") ?: device
             KeyValue("MCP 服务器", s.optString("mcp"))
-            KeyValue("设备", "${dev.opt("name", "未连接")} (${dev.opt("type", "-")})")
+            KeyValue("设备", "${dev.optString("name", "未连接")} (${dev.optString("type", "-")})")
             KeyValue("设备状态", if (device.optBoolean("connected", false)) "已连接" else "断开")
             KeyValue("会话", "${s.optJSONObject("sessions")?.opt("total_sessions") ?: 0}")
         }

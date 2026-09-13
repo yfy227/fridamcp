@@ -6,9 +6,9 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Assignment
-import androidx.compose.material.icons.filled.Dashboard
-import androidx.compose.material.icons.filled.SettingsRemote
+import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
@@ -48,10 +48,10 @@ class MainActivity : ComponentActivity() {
 }
 
 private val TABS = listOf(
-    Triple("连接", Icons.Filled.SettingsRemote, "connect"),
-    Triple("仪表盘", Icons.Filled.Dashboard, "dashboard"),
+    Triple("连接", Icons.Filled.Build, "connect"),
+    Triple("仪表盘", Icons.Filled.Home, "dashboard"),
     Triple("进程", Icons.Filled.List, "processes"),
-    Triple("会话", Icons.Filled.Assignment, "sessions"),
+    Triple("会话", Icons.Filled.Add, "sessions"),
 )
 
 @Composable
