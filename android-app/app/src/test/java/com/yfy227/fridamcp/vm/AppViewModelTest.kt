@@ -65,17 +65,25 @@ class AppViewModelTest {
 
     @Test
     fun `connect failure keeps disconnected with error`() {
-        val rest: RestClient = mock {
-            onBlocking { getStatus() } doThrow IOException("Connection refused")
-            onBlocking { getSessions() } doReturn JSONArray("[]")
-            onBlocking { getProcesses() } doReturn JSONArray("[]")
-            onBlocking { getApplications() } doReturn JSONArray("[]")
-        }
-        val vm = AppViewModel(restClient = rest)
-        vm.connect("http://x:8770") {}
+        // 真实网络层失败路径：MockWebServer 返回 503（比 mock 更真实）
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.start()
+        server.enqueue(
+            okhttp3.mockwebserver.MockResponse()
+                .setResponseCode(503)
+                .setHeader("Content-Type", "application/json")
+                .setBody("""{"error":"no matching device found"}""")
+        )
+        val serverUrl = server.url("/").toString().trimEnd('/')
+        val vm = AppViewModel(
+            restClient = RestClient(serverUrl)
+        )
+        vm.connect(serverUrl) {}
 
         assertFalse(vm.connected.value)
-        assertTrue(vm.lastError.value!!.contains("Connection refused"))
+        assertNotNull(vm.lastError.value)
+        assertTrue(vm.lastError.value!!.contains("503"))
+        server.shutdown()
     }
 
     @Test

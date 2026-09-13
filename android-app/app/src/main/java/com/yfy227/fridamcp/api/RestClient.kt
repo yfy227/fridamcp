@@ -18,6 +18,11 @@ import java.util.concurrent.TimeUnit
  */
 class RestClient(private var baseUrl: String) {
 
+    init {
+        // 构造与 setBaseUrl 一致：统一去掉尾斜杠
+        this.baseUrl = baseUrl.trimEnd('/')
+    }
+
     private val jsonMedia = "application/json; charset=utf-8".toMediaType()
 
     private val client: OkHttpClient = OkHttpClient.Builder()
