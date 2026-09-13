@@ -93,7 +93,10 @@ def test_mcp_tool_uses_shared_impl():
 
 def test_gui_uses_shared_impl(fake_client):
     """GUI 路径（app.py）必须走共享实现——裸 % 填充回归"""
-    import app  # noqa: F401  (gradio 依赖较重，仅此处 import)
+    # app.py 顶层 import gradio；轻依赖环境（CI）自动跳过 GUI 薄壳测试，
+    # 核心共享层（impl）测试不受影响
+    pytest.importorskip("gradio", reason="GUI shell tests require gradio")
+    import app  # noqa: F401
 
     out = app.hook_java_method("s1", "com.example.App", "check")
     assert out.startswith("✅"), out
@@ -107,6 +110,7 @@ def test_gui_uses_shared_impl(fake_client):
 
 def test_gui_reports_errors(fake_client):
     """共享实现抛错时 GUI 给出 ❌ 前缀而非 traceback"""
+    pytest.importorskip("gradio", reason="GUI shell tests require gradio")
     import app
 
     def boom(*a, **kw):
