@@ -268,55 +268,28 @@ def close_all_sessions():
 
 def hook_java_method(session_id, class_name, method_name):
     """Hook Java 方法"""
-    try:
-        import uuid
-        from fridamcp.modules.hook import HOOK_JAVA_METHOD_TEMPLATE
-        hook_id = f"hook_{uuid.uuid4().hex[:8]}"
-        source = HOOK_JAVA_METHOD_TEMPLATE % {
-            "hook_id": hook_id,
-            "class_name": class_name,
-            "method_name": method_name,
-        }
-        result = frida_client.execute_script(session_id, source, script_name=hook_id)
-        session = session_manager.get_session(session_id)
-        if session:
-            session.add_hook(hook_id, {
-                "type": "java_method",
-                "class_name": class_name,
-                "method_name": method_name,
-                "script_id": result["script_id"],
-            })
-        return f"✅ Hook 已安装\nHook ID: {hook_id}\nScript ID: {result['script_id']}"
-    except Exception as e:
-        return f"❌ Hook 失败: {e}"
+    from fridamcp.modules.hook import hook_java_method_impl
+
+    result = hook_java_method_impl(session_id, class_name, method_name)
+    if "error" in result:
+        return f"❌ Hook 失败: {result['error']}"
+    return (
+        f"✅ Hook 已安装\n"
+        f"Hook ID: {result['hook_id']}\n"
+        f"Script ID: {result['script_id']}"
+    )
 
 
 def hook_native_func(session_id, module_name, func_name, offset):
     """Hook Native 函数"""
-    try:
-        import uuid
-        from fridamcp.modules.hook import HOOK_NATIVE_TEMPLATE
-        hook_id = f"native_{uuid.uuid4().hex[:8]}"
-        off = int(offset) if offset else 0
-        source = HOOK_NATIVE_TEMPLATE % {
-            "hook_id": hook_id,
-            "module_name": module_name,
-            "func_name": func_name or "",
-            "offset": off,
-        }
-        result = frida_client.execute_script(session_id, source, script_name=hook_id)
-        session = session_manager.get_session(session_id)
-        if session:
-            session.add_hook(hook_id, {
-                "type": "native",
-                "module_name": module_name,
-                "func_name": func_name,
-                "offset": off,
-                "script_id": result["script_id"],
-            })
-        return f"✅ Native Hook 已安装\nHook ID: {hook_id}"
-    except Exception as e:
-        return f"❌ Hook 失败: {e}"
+    from fridamcp.modules.hook import hook_native_impl
+
+    result = hook_native_impl(
+        session_id, module_name, func_name, int(offset) if offset else 0
+    )
+    if "error" in result:
+        return f"❌ Hook 失败: {result['error']}"
+    return f"✅ Native Hook 已安装\nHook ID: {result['hook_id']}"
 
 
 def get_hook_messages(session_id, clear=False):

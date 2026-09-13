@@ -190,6 +190,136 @@ TRACE_METHOD_TEMPLATE = """
 """
 
 
+
+# ============================================================
+# 共享实现层：MCP 工具与 GUI（app.py）复用同一份逻辑。
+# 此前 GUI 在 app.py 里复制了一份裸 % 填充调用，模板协议改为
+# JSON 字面量后 GUI 路径未同步，直接产生非法 JS——这正是
+# 逻辑双份维护的代价。今后协议/行为改动只需改这里。
+# ============================================================
+
+
+def hook_java_method_impl(
+    session_id: str,
+    class_name: str,
+    method_name: str,
+) -> Dict[str, Any]:
+    """安装 Java 方法 Hook
+
+    当目标方法被调用时，会记录参数和返回值到会话消息中。
+    使用 get_messages(session_id) 查看调用记录。
+    """
+    try:
+        hook_id = f"hook_{uuid.uuid4().hex[:8]}"
+        # 用户参数经 json.dumps 注入为 JS 字面量：
+        # 含引号/反斜杠/换行的输入不会破坏脚本语法（此前直接
+        # %s 嵌入双引号字符串，method_name='a";rm' 即语法错误）
+        source = HOOK_JAVA_METHOD_TEMPLATE % {
+            "hook_id": json.dumps(hook_id),
+            "class_name": json.dumps(class_name),
+            "method_name": json.dumps(method_name),
+        }
+        result = frida_client.execute_script(
+            session_id, source, script_name=hook_id
+        )
+        session = session_manager.get_session(session_id)
+        if session:
+            session.add_hook(
+                hook_id,
+                {
+                    "type": "java_method",
+                    "class_name": class_name,
+                    "method_name": method_name,
+                    "script_id": result["script_id"],
+                },
+            )
+        return {
+            "hook_id": hook_id,
+            "script_id": result["script_id"],
+            "session_id": session_id,
+            "class_name": class_name,
+            "method_name": method_name,
+        }
+    except Exception as e:
+        logger.error(f"hook_method failed: {e}")
+        return {"error": str(e)}
+
+
+def hook_native_impl(
+    session_id: str,
+    module_name: str,
+    func_name: Optional[str] = None,
+    offset: int = 0,
+) -> Dict[str, Any]:
+    """Hook 一个 Native 函数（函数名或偏移量二选一）"""
+    try:
+        hook_id = f"native_{uuid.uuid4().hex[:8]}"
+        source = HOOK_NATIVE_TEMPLATE % {
+            "hook_id": json.dumps(hook_id),
+            "module_name": json.dumps(module_name),
+            "func_name": json.dumps(func_name or ""),
+            "offset": int(offset),
+        }
+        result = frida_client.execute_script(
+            session_id, source, script_name=hook_id
+        )
+        session = session_manager.get_session(session_id)
+        if session:
+            session.add_hook(
+                hook_id,
+                {
+                    "type": "native",
+                    "module_name": module_name,
+                    "func_name": func_name,
+                    "offset": int(offset),
+                    "script_id": result["script_id"],
+                },
+            )
+        return {
+            "hook_id": hook_id,
+            "script_id": result["script_id"],
+            "session_id": session_id,
+        }
+    except Exception as e:
+        logger.error(f"hook_native failed: {e}")
+        return {"error": str(e)}
+
+
+def trace_method_impl(
+    session_id: str,
+    class_name: str,
+) -> Dict[str, Any]:
+    """追踪一个类的所有方法调用"""
+    try:
+        hook_id = f"trace_{uuid.uuid4().hex[:8]}"
+        source = TRACE_METHOD_TEMPLATE % {
+            "hook_id": json.dumps(hook_id),
+            "class_name": json.dumps(class_name),
+        }
+        result = frida_client.execute_script(
+            session_id, source, script_name=hook_id
+        )
+        session = session_manager.get_session(session_id)
+        if session:
+            session.add_hook(
+                hook_id,
+                {
+                    "type": "trace",
+                    "class_name": class_name,
+                    "script_id": result["script_id"],
+                },
+            )
+        return {
+            "hook_id": hook_id,
+            "script_id": result["script_id"],
+            "session_id": session_id,
+            "class_name": class_name,
+        }
+    except Exception as e:
+        logger.error(f"trace_method failed: {e}")
+        return {"error": str(e)}
+
+
 def register_tools(mcp):
     """向 MCP 服务器注册 Hook 管理工具"""
 
@@ -212,40 +342,7 @@ def register_tools(mcp):
         Returns:
             包含 hook_id 和 script_id 的字典
         """
-        try:
-            hook_id = f"hook_{uuid.uuid4().hex[:8]}"
-            # 用户参数经 json.dumps 注入为 JS 字面量：
-            # 含引号/反斜杠/换行的输入不会破坏脚本语法（此前直接
-            # %s 嵌入双引号字符串，method_name='a";rm' 即语法错误）
-            source = HOOK_JAVA_METHOD_TEMPLATE % {
-                "hook_id": json.dumps(hook_id),
-                "class_name": json.dumps(class_name),
-                "method_name": json.dumps(method_name),
-            }
-            result = frida_client.execute_script(
-                session_id, source, script_name=hook_id
-            )
-            session = session_manager.get_session(session_id)
-            if session:
-                session.add_hook(
-                    hook_id,
-                    {
-                        "type": "java_method",
-                        "class_name": class_name,
-                        "method_name": method_name,
-                        "script_id": result["script_id"],
-                    },
-                )
-            return {
-                "hook_id": hook_id,
-                "script_id": result["script_id"],
-                "session_id": session_id,
-                "class_name": class_name,
-                "method_name": method_name,
-            }
-        except Exception as e:
-            logger.error(f"hook_method failed: {e}")
-            return {"error": str(e)}
+        return hook_java_method_impl(session_id, class_name, method_name)
 
     @mcp.tool()
     def hook_native(
@@ -267,40 +364,7 @@ def register_tools(mcp):
         Returns:
             包含 hook_id 和 script_id 的字典
         """
-        try:
-            hook_id = f"native_{uuid.uuid4().hex[:8]}"
-            source = HOOK_NATIVE_TEMPLATE % {
-                "hook_id": json.dumps(hook_id),
-                "module_name": json.dumps(module_name),
-                "func_name": json.dumps(func_name or ""),
-                "offset": int(offset),
-            }
-            result = frida_client.execute_script(
-                session_id, source, script_name=hook_id
-            )
-            session = session_manager.get_session(session_id)
-            if session:
-                session.add_hook(
-                    hook_id,
-                    {
-                        "type": "native",
-                        "module_name": module_name,
-                        "func_name": func_name,
-                        "offset": offset,
-                        "script_id": result["script_id"],
-                    },
-                )
-            return {
-                "hook_id": hook_id,
-                "script_id": result["script_id"],
-                "session_id": session_id,
-                "module_name": module_name,
-                "func_name": func_name,
-                "offset": offset,
-            }
-        except Exception as e:
-            logger.error(f"hook_native failed: {e}")
-            return {"error": str(e)}
+        return hook_native_impl(session_id, module_name, func_name, offset)
 
     @mcp.tool()
     def trace_method(
@@ -318,34 +382,7 @@ def register_tools(mcp):
         Returns:
             包含 hook_id 和 script_id 的字典
         """
-        try:
-            hook_id = f"trace_{uuid.uuid4().hex[:8]}"
-            source = TRACE_METHOD_TEMPLATE % {
-                "hook_id": json.dumps(hook_id),
-                "class_name": json.dumps(class_name),
-            }
-            result = frida_client.execute_script(
-                session_id, source, script_name=hook_id
-            )
-            session = session_manager.get_session(session_id)
-            if session:
-                session.add_hook(
-                    hook_id,
-                    {
-                        "type": "trace",
-                        "class_name": class_name,
-                        "script_id": result["script_id"],
-                    },
-                )
-            return {
-                "hook_id": hook_id,
-                "script_id": result["script_id"],
-                "session_id": session_id,
-                "class_name": class_name,
-            }
-        except Exception as e:
-            logger.error(f"trace_method failed: {e}")
-            return {"error": str(e)}
+        return trace_method_impl(session_id, class_name)
 
     @mcp.tool()
     def list_hooks(session_id: str) -> List[Dict[str, Any]]:
