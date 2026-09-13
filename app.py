@@ -406,71 +406,56 @@ def read_memory(session_id, address, size=64):
 # 网络监控
 # ============================================================
 
-_network_capturing = False
-
 def start_network_capture(session_id, capture_ssl=True):
-    """开始网络捕获"""
-    global _network_capturing
-    try:
-        from fridamcp.modules.network import SSL_HOOK_TEMPLATE, _capture_buffer, _capture_active
-        import uuid
-        _capture_buffer.clear()
-        _capture_active[session_id] = True
-        _network_capturing = True
+    """开始网络捕获（走 modules/network 共享实现）"""
+    from fridamcp.modules.network import start_capture_impl
 
-        if capture_ssl:
-            hook_id = f"ssl_{uuid.uuid4().hex[:8]}"
-            source = SSL_HOOK_TEMPLATE % {"hook_id": hook_id}
-            frida_client.execute_script(session_id, source, script_name=hook_id)
-
-        return f"✅ 网络捕获已启动 (SSL={'开' if capture_ssl else '关'})"
-    except Exception as e:
-        return f"❌ 失败: {e}"
+    result = start_capture_impl(session_id, capture_ssl=capture_ssl)
+    if "error" in result:
+        return f"❌ 失败: {result['error']}"
+    types = "、".join(h["type"] for h in result["hooks"]) or "无"
+    return f"✅ 网络捕获已启动 (Hooks: {types})"
 
 
 def stop_network_capture(session_id):
-    """停止网络捕获"""
-    global _network_capturing
-    try:
-        from fridamcp.modules.network import _capture_active
-        _capture_active.pop(session_id, None)
-        _network_capturing = False
-        return "✅ 网络捕获已停止"
-    except Exception as e:
-        return f"❌ 失败: {e}"
+    """停止网络捕获（走 modules/network 共享实现）"""
+    from fridamcp.modules.network import stop_capture_impl
+
+    result = stop_capture_impl(session_id)
+    if "error" in result:
+        return f"❌ 失败: {result['error']}"
+    return f"✅ 网络捕获已停止（本次捕获 {result['captured_count']} 条）"
 
 
 def get_network_capture(session_id, clear=False):
-    """获取网络捕获"""
-    try:
-        from fridamcp.modules.network import _capture_buffer
-        items = list(_capture_buffer)
-        if clear:
-            _capture_buffer.clear()
-        if not items:
-            return "无捕获数据"
-        lines = []
-        for item in items[-100:]:
-            t = item.get("type", "")
-            data = item.get("data", "")
-            if len(data) > 200:
-                data = data[:200] + "..."
-            ip = item.get("ip", "")
-            port = item.get("port", "")
-            size = item.get("size", "")
-            if t == "ssl_write":
-                lines.append(f"[SSL→] {size}B: {data}")
-            elif t == "ssl_read":
-                lines.append(f"[SSL←] {size}B: {data}")
-            elif t == "socket_connect":
-                lines.append(f"[CONN] {ip}:{port}")
-            elif t == "socket_send":
-                lines.append(f"[SEND] {size}B: {data}")
-            else:
-                lines.append(f"[{t}] {data}")
-        return "\n".join(lines)
-    except Exception as e:
-        return f"错误: {e}"
+    """获取网络捕获（走 modules/network 共享实现）"""
+    from fridamcp.modules.network import get_capture_impl
+
+    items = get_capture_impl(session_id, clear=clear)
+    if items and "error" in items[0]:
+        return f"❌ 失败: {items[0]['error']}"
+    if not items:
+        return "无捕获数据"
+    lines = []
+    for item in items[-100:]:
+        t = item.get("type", "")
+        data = str(item.get("data") or "")
+        if len(data) > 200:
+            data = data[:200] + "..."
+        ip = item.get("ip") or ""
+        port = item.get("port") or ""
+        size = item.get("size") or ""
+        if t == "ssl_write":
+            lines.append(f"[SSL→] {size}B: {data}")
+        elif t == "ssl_read":
+            lines.append(f"[SSL←] {size}B: {data}")
+        elif t == "socket_connect":
+            lines.append(f"[CONN] {ip}:{port}")
+        elif t == "socket_send":
+            lines.append(f"[SEND] {size}B: {data}")
+        else:
+            lines.append(f"[{t}] {data}")
+    return "\n".join(lines)
 
 
 # ============================================================

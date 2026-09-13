@@ -13,8 +13,15 @@ from ..config import config
 from ..utils.logger import logger
 
 
-# 全局网络捕获缓冲区
-_capture_buffer: deque = deque(maxlen=config.NETWORK_CAPTURE_LIMIT)
+# 网络类消息类型（send() 消息 type 字段）
+NETWORK_MSG_TYPES = (
+    "ssl_write", "ssl_read",
+    "socket_connect", "socket_send", "socket_recv",
+)
+
+# 捕获状态标记（数据本体经 frida send() 进入会话消息缓冲，
+# 由 get_capture_impl 读取——旧 _capture_buffer 从未有写入方，
+# 是恒空死缓冲，已删除）
 _capture_active: Dict[str, bool] = {}
 
 
@@ -167,6 +174,108 @@ SOCKET_HOOK_TEMPLATE = """
 """
 
 
+
+# ============================================================
+# 共享实现层：MCP 工具与 GUI（app.py）复用同一份逻辑
+# （与 hook 模块的 impl 层同一模式）
+# ============================================================
+
+
+def start_capture_impl(
+    session_id: str,
+    capture_ssl: bool = True,
+    capture_socket: bool = False,
+) -> Dict[str, Any]:
+    """开始网络捕获（SSL / Socket Hook 注入）"""
+    try:
+        _capture_active[session_id] = True
+
+        results = {"hooks": []}
+
+        if capture_ssl:
+            hook_id = f"ssl_{uuid.uuid4().hex[:8]}"
+            source = SSL_HOOK_TEMPLATE % {"hook_id": hook_id}
+            result = frida_client.execute_script(
+                session_id, source, script_name=hook_id
+            )
+            results["hooks"].append({
+                "hook_id": hook_id,
+                "type": "ssl",
+                "script_id": result["script_id"],
+            })
+
+        if capture_socket:
+            hook_id = f"socket_{uuid.uuid4().hex[:8]}"
+            source = SOCKET_HOOK_TEMPLATE % {"hook_id": hook_id}
+            result = frida_client.execute_script(
+                session_id, source, script_name=hook_id
+            )
+            results["hooks"].append({
+                "hook_id": hook_id,
+                "type": "socket",
+                "script_id": result["script_id"],
+            })
+
+        results["session_id"] = session_id
+        results["status"] = "capturing"
+        return results
+    except Exception as e:
+        logger.error(f"start_capture failed: {e}")
+        return {"error": str(e)}
+
+
+def stop_capture_impl(session_id: str) -> Dict[str, Any]:
+    """停止网络捕获，返回本次捕获条数"""
+    try:
+        _capture_active.pop(session_id, None)
+        # 数据在会话消息里（旧实现读恒空的死缓冲，永远返回 0）
+        count = 0
+        try:
+            messages = frida_client.get_messages(session_id, clear=False)
+            count = sum(
+                1 for msg in messages
+                if msg.get("message", {}).get("type") in NETWORK_MSG_TYPES
+            )
+        except Exception:
+            pass
+        return {
+            "success": True,
+            "session_id": session_id,
+            "captured_count": count,
+        }
+    except Exception as e:
+        logger.error(f"stop_capture failed: {e}")
+        return {"error": str(e)}
+
+
+def get_capture_impl(
+    session_id: str,
+    clear: bool = False,
+    filter_type: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """获取捕获的网络数据（来自会话消息缓冲）"""
+    try:
+        messages = frida_client.get_messages(session_id, clear=clear)
+        captures = []
+        for msg in messages:
+            m = msg.get("message", {})
+            if m.get("type") in NETWORK_MSG_TYPES:
+                if filter_type and m.get("type") != filter_type:
+                    continue
+                captures.append({
+                    "type": m.get("type"),
+                    "hook_id": m.get("hookId"),
+                    "size": m.get("size"),
+                    "data": m.get("data"),
+                    "ip": m.get("ip"),
+                    "port": m.get("port"),
+                })
+        return captures
+    except Exception as e:
+        logger.error(f"get_capture failed: {e}")
+        return [{"error": str(e)}]
+
+
 def register_tools(mcp):
     """向 MCP 服务器注册网络监控工具"""
 
@@ -186,42 +295,7 @@ def register_tools(mcp):
         Returns:
             包含 hook_id 的字典
         """
-        try:
-            _capture_active[session_id] = True
-            _capture_buffer.clear()
-
-            results = {"hooks": []}
-
-            if capture_ssl:
-                hook_id = f"ssl_{uuid.uuid4().hex[:8]}"
-                source = SSL_HOOK_TEMPLATE % {"hook_id": hook_id}
-                result = frida_client.execute_script(
-                    session_id, source, script_name=hook_id
-                )
-                results["hooks"].append({
-                    "hook_id": hook_id,
-                    "type": "ssl",
-                    "script_id": result["script_id"],
-                })
-
-            if capture_socket:
-                hook_id = f"socket_{uuid.uuid4().hex[:8]}"
-                source = SOCKET_HOOK_TEMPLATE % {"hook_id": hook_id}
-                result = frida_client.execute_script(
-                    session_id, source, script_name=hook_id
-                )
-                results["hooks"].append({
-                    "hook_id": hook_id,
-                    "type": "socket",
-                    "script_id": result["script_id"],
-                })
-
-            results["session_id"] = session_id
-            results["status"] = "capturing"
-            return results
-        except Exception as e:
-            logger.error(f"start_capture failed: {e}")
-            return {"error": str(e)}
+        return start_capture_impl(session_id, capture_ssl, capture_socket)
 
     @mcp.tool()
     def stop_capture(session_id: str) -> Dict[str, Any]:
@@ -233,17 +307,7 @@ def register_tools(mcp):
         Returns:
             操作结果，包含已捕获的条目数
         """
-        try:
-            _capture_active[session_id] = False
-            count = len(_capture_buffer)
-            return {
-                "success": True,
-                "session_id": session_id,
-                "captured_count": count,
-            }
-        except Exception as e:
-            logger.error(f"stop_capture failed: {e}")
-            return {"error": str(e)}
+        return stop_capture_impl(session_id)
 
     @mcp.tool()
     def get_capture(
@@ -261,29 +325,7 @@ def register_tools(mcp):
         Returns:
             捕获的数据列表
         """
-        try:
-            messages = frida_client.get_messages(session_id, clear=clear)
-            captures = []
-            for msg in messages:
-                m = msg.get("message", {})
-                if m.get("type") in (
-                    "ssl_write", "ssl_read",
-                    "socket_connect", "socket_send", "socket_recv"
-                ):
-                    if filter_type and m.get("type") != filter_type:
-                        continue
-                    captures.append({
-                        "type": m.get("type"),
-                        "hook_id": m.get("hookId"),
-                        "size": m.get("size"),
-                        "data": m.get("data"),
-                        "ip": m.get("ip"),
-                        "port": m.get("port"),
-                    })
-            return captures
-        except Exception as e:
-            logger.error(f"get_capture failed: {e}")
-            return [{"error": str(e)}]
+        return get_capture_impl(session_id, clear, filter_type)
 
     @mcp.tool()
     def hook_ssl(session_id: str) -> Dict[str, Any]:
