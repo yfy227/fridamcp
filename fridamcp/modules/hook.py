@@ -16,9 +16,9 @@ from ..utils.logger import logger
 # Hook 脚本模板
 HOOK_JAVA_METHOD_TEMPLATE = """
 (function() {
-    var hookId = "%(hook_id)s";
-    var className = "%(class_name)s";
-    var methodName = "%(method_name)s";
+    var hookId = %(hook_id)s;
+    var className = %(class_name)s;
+    var methodName = %(method_name)s;
 
     rpc.exports = {
         info: function() {
@@ -84,9 +84,9 @@ HOOK_JAVA_METHOD_TEMPLATE = """
 
 HOOK_NATIVE_TEMPLATE = """
 (function() {
-    var hookId = "%(hook_id)s";
-    var moduleName = "%(module_name)s";
-    var funcName = "%(func_name)s";
+    var hookId = %(hook_id)s;
+    var moduleName = %(module_name)s;
+    var funcName = %(func_name)s;
     var offset = %(offset)s;
 
     rpc.exports = {
@@ -138,8 +138,8 @@ HOOK_NATIVE_TEMPLATE = """
 
 TRACE_METHOD_TEMPLATE = """
 (function() {
-    var hookId = "%(hook_id)s";
-    var className = "%(class_name)s";
+    var hookId = %(hook_id)s;
+    var className = %(class_name)s;
 
     rpc.exports = {
         info: function() {
@@ -214,10 +214,13 @@ def register_tools(mcp):
         """
         try:
             hook_id = f"hook_{uuid.uuid4().hex[:8]}"
+            # 用户参数经 json.dumps 注入为 JS 字面量：
+            # 含引号/反斜杠/换行的输入不会破坏脚本语法（此前直接
+            # %s 嵌入双引号字符串，method_name='a";rm' 即语法错误）
             source = HOOK_JAVA_METHOD_TEMPLATE % {
-                "hook_id": hook_id,
-                "class_name": class_name,
-                "method_name": method_name,
+                "hook_id": json.dumps(hook_id),
+                "class_name": json.dumps(class_name),
+                "method_name": json.dumps(method_name),
             }
             result = frida_client.execute_script(
                 session_id, source, script_name=hook_id
@@ -267,10 +270,10 @@ def register_tools(mcp):
         try:
             hook_id = f"native_{uuid.uuid4().hex[:8]}"
             source = HOOK_NATIVE_TEMPLATE % {
-                "hook_id": hook_id,
-                "module_name": module_name,
-                "func_name": func_name or "",
-                "offset": offset,
+                "hook_id": json.dumps(hook_id),
+                "module_name": json.dumps(module_name),
+                "func_name": json.dumps(func_name or ""),
+                "offset": int(offset),
             }
             result = frida_client.execute_script(
                 session_id, source, script_name=hook_id
@@ -318,8 +321,8 @@ def register_tools(mcp):
         try:
             hook_id = f"trace_{uuid.uuid4().hex[:8]}"
             source = TRACE_METHOD_TEMPLATE % {
-                "hook_id": hook_id,
-                "class_name": class_name,
+                "hook_id": json.dumps(hook_id),
+                "class_name": json.dumps(class_name),
             }
             result = frida_client.execute_script(
                 session_id, source, script_name=hook_id
