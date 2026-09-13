@@ -15,17 +15,15 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
-import org.mockito.kotlin.any
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.mock
-import org.mockito.kotlin.stubbing
 import java.io.IOException
 
 /**
- * ViewModel 状态流转测试（纯 JVM + coroutines-test）。
+ * ViewModel 状态流转测试（纯 JVM + coroutines-test + mockito-kotlin）。
  *
- * 注：org.json 在本地 JVM 单测里可用（Android Gradle 的 jar）。
+ * org.json 使用 Maven 真实实现（见 build.gradle.kts 测试依赖）。
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppViewModelTest {
@@ -42,25 +40,18 @@ class AppViewModelTest {
         Dispatchers.resetMain()
     }
 
-    private fun mockRest(status: JSONObject? = null): RestClient = mock {
-        if (status != null) {
-            stubbing(it) { onBlocking { getStatus() } doReturn status }
-        }
-    }
-
     @Test
     fun `connect success sets connected and loads status`() {
         val status = JSONObject(
             """{"version":"3.0.0","mcp":"port 8768",
                 "device":{"connected":false},"sessions":{"total_sessions":0}}"""
         )
-        val rest = mock {
-            stubbing(it) {
-                onBlocking { getStatus() } doReturn status
-                onBlocking { getSessions() } doReturn JSONArray("[]")
-                onBlocking { getProcesses() } doReturn JSONArray("[]")
-                onBlocking { getApplications() } doReturn JSONArray("[]")
-            }
+        // mockito-kotlin KStubbing 语法：mock<T> { onBlocking ... doReturn ... }
+        val rest: RestClient = mock {
+            onBlocking { getStatus() } doReturn status
+            onBlocking { getSessions() } doReturn JSONArray("[]")
+            onBlocking { getProcesses() } doReturn JSONArray("[]")
+            onBlocking { getApplications() } doReturn JSONArray("[]")
         }
         val vm = AppViewModel(restClient = rest)
         var navigated = false
@@ -74,10 +65,11 @@ class AppViewModelTest {
 
     @Test
     fun `connect failure keeps disconnected with error`() {
-        val rest = mock {
-            stubbing(it) {
-                onBlocking { getStatus() } doThrow IOException("Connection refused")
-            }
+        val rest: RestClient = mock {
+            onBlocking { getStatus() } doThrow IOException("Connection refused")
+            onBlocking { getSessions() } doReturn JSONArray("[]")
+            onBlocking { getProcesses() } doReturn JSONArray("[]")
+            onBlocking { getApplications() } doReturn JSONArray("[]")
         }
         val vm = AppViewModel(restClient = rest)
         vm.connect("http://x:8770") {}
