@@ -25,16 +25,20 @@ class DeviceManager:
     _lock = threading.Lock()
 
     def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._device = None
-            cls._instance._device_type = None
-            cls._instance._device_id = None
-            cls._instance._connected_at = None
-            cls._instance._reconnect_count = 0
-            cls._instance._heartbeat_thread = None
-            cls._instance._heartbeat_running = False
-            cls._instance._last_heartbeat = None
+        # 加锁防止多线程首次导入时创建多个实例
+        # （原代码定义了 _lock 却从未在 __new__ 中使用）
+        with cls._lock:
+            if cls._instance is None:
+                inst = super().__new__(cls)
+                inst._device = None
+                inst._device_type = None
+                inst._device_id = None
+                inst._connected_at = None
+                inst._reconnect_count = 0
+                inst._heartbeat_thread = None
+                inst._heartbeat_running = False
+                inst._last_heartbeat = None
+                cls._instance = inst
         return cls._instance
 
     def _start_heartbeat(self):

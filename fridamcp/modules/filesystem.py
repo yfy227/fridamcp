@@ -6,6 +6,7 @@
 
 import os
 import base64
+import shlex
 import subprocess
 from typing import Dict, Any, List, Optional
 
@@ -54,7 +55,7 @@ def register_tools(mcp):
             文件列表，每个条目包含 name、type、size、perms
         """
         try:
-            output = _run_adb_shell(f'ls -la "{path}"', device)
+            output = _run_adb_shell(f"ls -la {shlex.quote(path)}", device)
             files = []
             for line in output.strip().split("\n")[1:]:  # skip total line
                 if not line.strip():
@@ -98,7 +99,7 @@ def register_tools(mcp):
         """
         try:
             # 先检查文件大小
-            size_output = _run_adb_shell(f'stat -c %s "{path}"', device)
+            size_output = _run_adb_shell(f"stat -c %s {shlex.quote(path)}", device)
             size = int(size_output.strip()) if size_output.strip().isdigit() else 0
 
             if size > max_size:
@@ -109,7 +110,7 @@ def register_tools(mcp):
                 }
 
             # 读取文件
-            output = _run_adb_shell(f'cat "{path}"', device)
+            output = _run_adb_shell(f"cat {shlex.quote(path)}", device)
 
             return {
                 "path": path,
@@ -210,14 +211,16 @@ def register_tools(mcp):
         try:
             # 获取应用数据路径
             base_path = f"/data/data/{package}"
+            quoted_path = shlex.quote(base_path)
             try:
                 output = _run_adb_shell(
-                    f'ls -la "{base_path}"', device
+                    f"ls -la {quoted_path}", device
                 )
             except RuntimeError:
-                # 可能需要 root
+                # 可能需要 root（su -c 的命令本身也要 quote）
+                inner = shlex.quote(f"ls -la {quoted_path}")
                 output = _run_adb_shell(
-                    f'su -c \'ls -la "{base_path}"\'', device
+                    f"su -c {inner}", device
                 )
 
             files = []
@@ -264,7 +267,7 @@ def register_tools(mcp):
         """
         try:
             output = _run_adb_shell(
-                f'dumpsys package {package}', device
+                f"dumpsys package {shlex.quote(package)}", device
             )
             info = {"package": package, "raw": output[:8192]}
             # 解析关键字段

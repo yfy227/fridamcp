@@ -5,8 +5,10 @@ UI 自动化模块
 """
 
 import os
+import re
 import time
 import base64
+import shlex
 import subprocess
 from typing import Dict, Any, List, Optional
 
@@ -114,11 +116,13 @@ def register_tools(mcp):
             操作结果
         """
         try:
-            # 转义特殊字符
+            # 转义特殊字符：adb input text 用 %s 表示空格
             escaped = text.replace(" ", "%s").replace("&", "\\&")
             escaped = escaped.replace("<", "\\<").replace(">", "\\>")
             escaped = escaped.replace("|", "\\|")
-            _run_adb_shell(f'input text "{escaped}"', device)
+            # 整体用 shlex.quote 包裹，防止 " $ ; ` 等字符被设备端
+            # shell 解释（MCP 工具参数来自 LLM，必须按不可信输入处理）
+            _run_adb_shell(f"input text {shlex.quote(escaped)}", device)
             return {"success": True, "text": text}
         except Exception as e:
             logger.error(f"input_text failed: {e}")
@@ -143,6 +147,13 @@ def register_tools(mcp):
             操作结果
         """
         try:
+            # keycode 只允许 KEYCODE_HOME 这类标识符，
+            # 拒绝任何携带 shell 元字符的输入
+            if not re.fullmatch(r"[A-Za-z0-9_]+", keycode):
+                return {
+                    "error": f"Invalid keycode: {keycode!r} "
+                    "(expected e.g. KEYCODE_HOME)"
+                }
             _run_adb_shell(f"input keyevent {keycode}", device)
             return {"success": True, "keycode": keycode}
         except Exception as e:
@@ -167,6 +178,12 @@ def register_tools(mcp):
             os.makedirs(config.SCREENSHOT_DIR, exist_ok=True)
             if not filename:
                 filename = f"screenshot_{int(time.time())}.png"
+            # 文件名白名单：禁止路径穿越（../）和 shell 元字符
+            if not re.fullmatch(r"[\w.-]+", filename):
+                return {
+                    "error": f"Invalid filename: {filename!r} "
+                    "(only word chars, dot and dash allowed)"
+                }
             local_path = os.path.join(config.SCREENSHOT_DIR, filename)
             remote_path = f"/sdcard/{filename}"
 

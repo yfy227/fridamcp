@@ -236,11 +236,14 @@ class SessionManager:
     _lock = threading.Lock()
 
     def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-            cls._instance._sessions: Dict[str, Session] = {}
-            cls._instance._cleanup_thread: Optional[threading.Thread] = None
-            cls._instance._shutdown = False
+        # 加锁防止多线程首次导入时创建多个实例
+        with cls._lock:
+            if cls._instance is None:
+                inst = super().__new__(cls)
+                inst._sessions: Dict[str, Session] = {}
+                inst._cleanup_thread: Optional[threading.Thread] = None
+                inst._shutdown = False
+                cls._instance = inst
         return cls._instance
 
     @classmethod

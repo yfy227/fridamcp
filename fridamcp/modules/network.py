@@ -28,9 +28,19 @@ SSL_HOOK_TEMPLATE = """
         }
     };
 
+    function findSSLExport(name) {
+        // 先做全局符号查找：能覆盖动态链接 libssl.so 以及
+        // 静态链接 BoringSSL（符号在主二进制/其他 .so）的场景
+        var addr = Module.findExportByName(null, name);
+        if (addr === null) {
+            addr = Module.findExportByName("libssl.so", name);
+        }
+        return addr;
+    }
+
     function hookSSL() {
         // Hook SSL_write
-        var SSL_write = Module.findExportByName("libssl.so", "SSL_write");
+        var SSL_write = findSSLExport("SSL_write");
         if (SSL_write) {
             Interceptor.attach(SSL_write, {
                 onEnter: function(args) {
@@ -55,7 +65,7 @@ SSL_HOOK_TEMPLATE = """
         }
 
         // Hook SSL_read
-        var SSL_read = Module.findExportByName("libssl.so", "SSL_read");
+        var SSL_read = findSSLExport("SSL_read");
         if (SSL_read) {
             Interceptor.attach(SSL_read, {
                 onEnter: function(args) {

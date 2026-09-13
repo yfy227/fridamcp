@@ -138,13 +138,14 @@ DUMP_SSL_KEYS_TEMPLATE = """
     };
 
     // Hook SSL_CTX_set_keylog_callback (如果存在)
-    var modules = ["libssl.so", "libboringssl.so"];
+    // 查找顺序：全局符号表优先（覆盖静态链接 BoringSSL 的 app），
+    // 其次 libssl.so / libboringssl.so
+    var modules = [null, "libssl.so", "libboringssl.so"];
     var hooked = false;
 
     modules.forEach(function(modName) {
         if (hooked) return;
-        var mod = Process.findModuleByName(modName);
-        if (!mod) return;
+        if (modName !== null && !Process.findModuleByName(modName)) return;
 
         // 尝试 Hook SSL_write 的内部密钥派生
         // 这里简化处理，Hook SSL_new 并记录 SSL 对象
@@ -177,8 +178,14 @@ DUMP_SSL_KEYS_TEMPLATE = """
             });
         }
 
-        hooked = true;
-        send({ type: "hook_attached", hookId: hookId, module: modName });
+        if (SSL_new || SSL_get_session) {
+            hooked = true;
+            send({
+                type: "hook_attached",
+                hookId: hookId,
+                module: modName === null ? "<global>" : modName
+            });
+        }
     });
 
     if (!hooked) {
