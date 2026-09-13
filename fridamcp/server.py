@@ -10,6 +10,7 @@ import os
 import signal
 import asyncio
 import argparse
+import threading
 from typing import Optional
 
 from .config import config
@@ -201,7 +202,17 @@ def _signal_handler(signum, frame):
 
 
 def _setup_signal_handlers():
-    """设置信号处理器"""
+    """设置信号处理器（仅主线程）
+
+    app.py / desktop_app.py 会在后台线程中运行 MCP 服务器，
+    而 Python 不允许在非主线程注册信号处理器（抛
+    ValueError: signal only works in main thread）——此前
+    GUI 的 --mcp / 启动MCP 按钮走的正是该路径且从未成功过。
+    后台线程模式下优雅关闭由 _shutdown_event 与 loop.stop() 承担。
+    """
+    if threading.current_thread() is not threading.main_thread():
+        logger.debug("Signal handlers skipped (MCP running in background thread)")
+        return
     signal.signal(signal.SIGINT, _signal_handler)
     signal.signal(signal.SIGTERM, _signal_handler)
 
@@ -218,8 +229,23 @@ async def run_sse_server(mcp, host: str, port: int):
     while not _shutdown_event.is_set():
         try:
             if hasattr(mcp, "run_sse_async"):
-                logger.info(f"Starting SSE server on {host}:{port}")
-                await mcp.run_sse_async(host=host, port=port)
+                import inspect
+
+                sig = inspect.signature(mcp.run_sse_async)
+                if "host" in sig.parameters:
+                    # 旧版 mcp SDK：host/port 作为参数
+                    logger.info(f"Starting SSE server on {host}:{port}")
+                    await mcp.run_sse_async(host=host, port=port)
+                else:
+                    # 新版 mcp SDK（run_sse_async(mount_path=None)）：
+                    # host/port 通过 settings 配置
+                    try:
+                        mcp.settings.host = host
+                        mcp.settings.port = port
+                    except Exception:
+                        pass
+                    logger.info(f"Starting SSE server on {host}:{port}")
+                    await mcp.run_sse_async()
             elif hasattr(mcp, "sse_app"):
                 import uvicorn
                 app = mcp.sse_app()

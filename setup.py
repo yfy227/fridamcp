@@ -13,7 +13,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/yfy227/fridamcp",
     packages=find_packages(exclude=["tests", "tests.*"]),
-    py_modules=["app"],
+    py_modules=["app", "desktop_app"],
     classifiers=[
         "Development Status :: 4 - Beta",
         "Intended Audience :: Developers",
@@ -45,8 +45,14 @@ setup(
     entry_points={
         "console_scripts": [
             "fridamcp=app:main",
+            "fridamcp-desktop=desktop_app:main",
             "fridamcp-server=fridamcp.server:main",
             "fridamcp-inject=injector.inject_apk:main",
         ],
+    },
+    extras_require={
+        # 桌面独立应用（原生窗口 + 单文件打包）
+        "desktop": ["pywebview>=5.0"],
+        "package": ["pyinstaller>=6.0"],
     },
 )

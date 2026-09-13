@@ -33,12 +33,41 @@ python app.py --port 8080
 
 打开浏览器访问 `http://localhost:7860` 即可使用图形界面。
 
-### 📱 移动端使用（推荐）
+### 🖥️ 桌面独立应用（免终端）
 
-GUI 已做移动端优先适配，手机/平板浏览器直接可用，并支持 PWA"添加到主屏幕"：
+**原生窗口形态**——无终端黑窗、无浏览器地址栏，双击即用，
+GUI 与 MCP 服务器全部内嵌，关窗即干净退出：
 
-1. 在电脑/Termux 上启动 GUI，手机（同一局域网）浏览器访问
-   `http://<电脑IP>:7860`
+```bash
+# 安装原生窗口支持（可选，强烈推荐）
+pip install "fridamcp[desktop]"        # = pywebview
+
+# 启动
+python desktop_app.py                  # 或 pip install 后: fridamcp-desktop
+```
+
+无 pywebview 时自动降级为系统浏览器模式。
+
+**打包为单文件可执行**（Windows .exe / macOS / Linux）：
+
+```bash
+./build_desktop.sh                      # 产出 dist/FridaMCP，双击运行
+```
+
+### 📱 手机独立应用（Termux，免终端日常使用）
+
+装一次 `bash android/termux_setup.sh`，之后日常使用**零终端操作**：
+
+- **桌面图标启动**：Termux:Widget 提供 "FridaMCP" 桌面快捷方式，点击后台启动 + 弹通知
+- **开机自启**：Termux:Boot 自动后台拉起（含健康检查与自动重启）
+- **App 式界面**：浏览器打开后"添加到主屏幕"，全屏 PWA 体验
+  （Termux 场景直接访问 `http://127.0.0.1:7860`，即本机）
+
+所需 Termux 配套应用（F-Droid 可装）：Termux:Widget、Termux:Boot、（可选）Termux:API。
+
+### 🌐 局域网访问 / PWA
+
+1. 启动 GUI 后，手机（同一局域网）浏览器访问 `http://<主机IP>:7860`
 2. 浏览器菜单选择 **"添加到主屏幕" / "安装应用"**（Android Chrome / iOS Safari 均支持）
 3. 从主屏幕图标启动即可获得 **全屏独立 App 体验**（无地址栏、独立任务卡片、
    蓝色主题状态栏）
