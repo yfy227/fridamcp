@@ -14,9 +14,10 @@ import org.json.JSONObject
 /**
  * 全局状态中心：服务器连接、仪表盘、进程、会话与 Hook 消息。
  */
-class AppViewModel : ViewModel() {
+class AppViewModel(restClient: RestClient = RestClient("http://127.0.0.1:8770")) : ViewModel() {
 
-    val rest = RestClient("http://127.0.0.1:8770")
+    // 构造注入（默认真实客户端）——单元测试可传入 mock
+    val rest: RestClient = restClient
 
     // ---------- 连接状态 ----------
     val connected = MutableStateFlow(false)

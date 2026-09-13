@@ -56,4 +56,13 @@ dependencies {
 
     // 网络（零代码生成：OkHttp + org.json 为 Android 内置）
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // 测试（纯 JVM：REST 契约回放 + ViewModel 状态流转）
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("org.mockito.kotlin:mockito-kotlin:5.4.0")
+    // android.jar 里的 org.json 是 stub（调用抛 "not mocked"），
+    // 单测需要 Maven 真实实现（API 与 Android 内置一致）
+    testImplementation("org.json:json:20231013")
 }

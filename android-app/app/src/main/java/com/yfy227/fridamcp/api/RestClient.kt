@@ -89,6 +89,10 @@ class RestClient(private var baseUrl: String) {
     suspend fun attach(pid: Int): JSONObject =
         JSONObject(post("/api/attach", JSONObject().put("pid", pid)))
 
+    /** 按进程名附加（服务端 AttachReq 支持 pid/name 二选一） */
+    suspend fun attachByName(name: String): JSONObject =
+        JSONObject(post("/api/attach", JSONObject().put("name", name)))
+
     suspend fun resume(pid: Int): JSONObject =
         JSONObject(post("/api/resume", JSONObject().put("pid", pid)))
 
