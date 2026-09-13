@@ -103,12 +103,15 @@ class DeviceManager:
         self,
         device_id: Optional[str] = None,
         device_type: Optional[str] = None,
+        fast: bool = False,
     ) -> frida.core.Device:
         """获取指定设备（带重试机制）
 
         Args:
             device_id: 设备 ID，None 表示使用配置中的默认设备
             device_type: 设备类型 (usb/remote/local)，None 表示使用配置默认值
+            fast: 快速模式——只尝试 1 次（REST API 无设备时避免
+                  长时间阻塞移动客户端；默认 False 保持原行为）
 
         Returns:
             Frida Device 对象
@@ -129,8 +132,8 @@ class DeviceManager:
                 logger.warning(f"Existing device connection lost: {e}, reconnecting...")
                 self._device = None
 
-        # 带重试的连接
-        max_retries = max(1, config.DEVICE_RECONNECT_MAX_RETRIES)
+        # 带重试的连接（fast 模式仅 1 次尝试）
+        max_retries = 1 if fast else max(1, config.DEVICE_RECONNECT_MAX_RETRIES)
         last_error = None
 
         for attempt in range(1, max_retries + 1):
@@ -141,10 +144,13 @@ class DeviceManager:
                     self._device = frida.get_device_manager().add_remote_device(host)
                 elif did:
                     logger.info(f"Getting device by id: {did} (attempt {attempt}/{max_retries})")
-                    self._device = frida.get_device(did)
+                    self._device = frida.get_device(did, timeout=0)
                 else:
                     logger.info(f"Getting {dtype} device (attempt {attempt}/{max_retries})")
-                    self._device = frida.get_device_manager().get_device(dtype)
+                    # timeout=0: 单次尝试立即失败——重试节奏由外层
+                    # max_retries × sleep 控制，库内部不再干等设备出现
+                    # （此前默认等待使无设备场景单次尝试即耗时 ~8s）
+                    self._device = frida.get_device_manager().get_device(dtype, timeout=0)
 
                 # 验证连接
                 self._device.query_system_parameters()
@@ -181,12 +187,14 @@ class DeviceManager:
         return self._device_type == dtype and self._device_id == did
 
     def get_current_device(self) -> Optional[frida.core.Device]:
-        """获取当前已连接的设备（不触发重连）"""
-        if self._device is None:
-            try:
-                return self.get_device()
-            except Exception:
-                return None
+        """获取当前已连接的设备（纯读，不触发重连）
+
+        此前实现在无设备时会调用 get_device() 完整重试（5x2s），
+        与"不触发重连"的语义相悖——所有调用方（REST 快速路径、
+        GUI 仪表盘轮询、get_device_info）都会被拖慢 10 秒。
+        需要重连语义的调用方（如 frida_client._get_device）本就
+        自带 get_device() 兜底，行为不变。
+        """
         return self._device
 
     def get_device_info(self) -> Dict[str, Any]:

@@ -33,6 +33,18 @@ from .utils.logger import logger, get_log_buffer
 app = FastAPI(title="FridaMCP REST API", version="1.0.0")
 
 
+@app.exception_handler(Exception)
+async def _unified_error_handler(request, exc: Exception):
+    """统一错误契约：任何端点异常返回 503 + {"error": <原因>}
+
+    移动客户端（OkHttp）对非 2xx 抛 IOException 并透出此消息，
+    避免 App 端拿到裸 500/空响应而无法提示用户。
+    """
+    from fastapi.responses import JSONResponse
+    logger.error(f"REST {request.url.path} failed: {exc}")
+    return JSONResponse(status_code=503, content={"error": str(exc)})
+
+
 # ---------- 请求模型 ----------
 
 class DeviceSelectReq(BaseModel):
@@ -92,10 +104,26 @@ class MemoryReadReq(BaseModel):
 
 @app.get("/api/status")
 def get_status() -> Dict[str, Any]:
-    """总览：MCP/设备/会话状态"""
+    """总览：MCP/设备/会话状态
+
+    字段契约与 Android App DashboardScreen 对齐：
+    - mcp: 服务器描述（App 显示在首行）
+    - device: 连接元数据 + 嵌套 device(连接时的 name/type/id)
+    """
+    dev = device_manager.get_current_device()  # 纯读，不触发重连
+    dev_detail = None
+    if dev is not None:
+        try:
+            dev_detail = {"name": dev.name, "type": dev.type, "id": dev.id}
+        except Exception:
+            dev_detail = None
+    device_status = dict(device_manager.get_status())
+    if dev_detail is not None:
+        device_status["device"] = dev_detail
     return {
         "version": "3.0.0",
-        "device": device_manager.get_status(),
+        "mcp": f"port {config.MCP_PORT}",
+        "device": device_status,
         "sessions": session_manager.get_status(),
     }
 
@@ -112,14 +140,35 @@ def select_device(req: DeviceSelectReq) -> Dict[str, Any]:
 
 # ---------- 进程 / 应用 ----------
 
+def _fast_device():
+    """取设备：优先复用已有连接，否则仅快速尝试 1 次
+
+    （设备重试 5x2s 的完整路径对移动端轮询太慢，
+    无设备时应在 1 次尝试内给出明确错误）
+    """
+    dev = device_manager.get_current_device()
+    if dev is None:
+        dev = device_manager.get_device(fast=True)
+    return dev
+
+
 @app.get("/api/processes")
 def list_processes() -> List[Dict[str, Any]]:
-    return frida_client.list_processes()
+    dev = _fast_device()
+    return [{"pid": p.pid, "name": p.name} for p in dev.enumerate_processes()]
 
 
 @app.get("/api/applications")
 def list_applications() -> List[Dict[str, Any]]:
-    return frida_client.list_applications()
+    dev = _fast_device()
+    return [
+        {
+            "identifier": a.identifier,
+            "name": a.name,
+            "pid": a.pid,
+        }
+        for a in dev.enumerate_applications()
+    ]
 
 
 @app.post("/api/spawn")

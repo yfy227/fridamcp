@@ -68,8 +68,37 @@ def test_devices_and_select(client):
 
 
 def test_processes_applications(client):
-    assert client.get("/api/processes").json()[0]["name"] == "init"
-    assert client.get("/api/applications").json()[0]["identifier"] == "com.x"
+    """进程/应用端点走 _fast_device 快速路径（不再经 frida_client）"""
+    class FakeProc:
+        pid, name = 1, "init"
+
+    class FakeApp:
+        identifier, name, pid = "com.x", "X", 0
+
+    class FakeDevice:
+        def enumerate_processes(self):
+            return [FakeProc()]
+
+        def enumerate_applications(self):
+            return [FakeApp()]
+
+    with patch.object(rest_api, "_fast_device", lambda: FakeDevice()):
+        assert client.get("/api/processes").json()[0]["name"] == "init"
+        assert client.get("/api/applications").json()[0]["identifier"] == "com.x"
+
+
+def test_processes_no_device_fast_fail(client):
+    """无设备时快速失败：503 + 明确错误（不重试轰炸）"""
+    # raise_server_exceptions=False: 让异常走统一 exception handler
+    # （默认 True 会把服务端异常直接抛给测试进程）
+    live = TestClient(rest_api.app, raise_server_exceptions=False)
+    with patch.object(
+        rest_api, "_fast_device",
+        MagicMock(side_effect=RuntimeError("no matching device found")),
+    ):
+        r = live.get("/api/processes")
+        assert r.status_code == 503
+        assert "no matching device" in r.json()["error"]
 
 
 def test_spawn_attach_resume_kill(client, mocked_deps):
