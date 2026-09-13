@@ -573,19 +573,99 @@ def inject_apk(input_apk, output_apk, arch, use_apktool, application_class):
 # 构建 GUI 界面
 # ============================================================
 
+# 移动端优先的自定义样式（注入方式随 gradio 版本不同：
+# gradio<6 传给 Blocks(theme=, css=)，gradio>=6 传给 launch(theme=, css=)）
+try:
+    _GRADIO_MAJOR = int(getattr(gr, "__version__", "4").split(".")[0])
+except (ValueError, AttributeError):
+    _GRADIO_MAJOR = 4
+
+GUI_THEME = gr.themes.Soft(primary_hue="blue")
+GUI_CSS = """
+.header { text-align: center; margin-bottom: 20px; }
+.status-box { padding: 10px; border-radius: 8px; }
+
+/* ===== 移动端适配 ===== */
+.header h1 { font-size: 1.5rem; margin: 0.4em 0; }
+.header p { font-size: 0.85rem; opacity: 0.75; }
+
+@media (max-width: 768px) {
+    /* 容器贴边，留出刘海屏安全区 */
+    .gradio-container {
+        max-width: 100% !important;
+        padding-left: max(10px, env(safe-area-inset-left)) !important;
+        padding-right: max(10px, env(safe-area-inset-right)) !important;
+        padding-bottom: max(10px, env(safe-area-inset-bottom)) !important;
+    }
+    .header h1 { font-size: 1.1rem; }
+    .header p { font-size: 0.72rem; }
+
+    /* 触控目标: 按钮至少 44px 高 (Apple HIG / Material 标准) */
+    button {
+        min-height: 44px;
+        font-size: 15px;
+    }
+
+    /* 输入框 16px: 防止 iOS Safari 聚焦时自动放大页面 */
+    input, textarea, select {
+        font-size: 16px !important;
+    }
+
+    /* 长输出(hexdump/日志)在窄屏换行，避免横向溢出 */
+    textarea { word-break: break-all; }
+
+    /* Tab 标签在窄屏顺畅横滑 */
+    .tab-container, [class*="tabs"] { -webkit-overflow-scrolling: touch; }
+}
+
+/* 桌面也生效: 数据表格横向可滚 */
+[data-testid="dataframe"], .table-wrap { overflow-x: auto; }
+"""
+
+
+def refresh_all_status():
+    """页面加载/刷新时拉取所有仪表盘状态
+
+    每项独立 try/except：单项失败（如无设备）不影响其余面板。
+    """
+    def _safe(fn, default):
+        try:
+            return fn()
+        except Exception as e:
+            logger.warning(f"dashboard refresh failed: {e}")
+            return default
+
+    return (
+        _safe(get_mcp_status, "状态获取失败"),
+        _safe(get_device_status, {"error": "设备状态获取失败"}),
+        _safe(session_manager.get_status, {"error": "会话状态获取失败"}),
+        _safe(list_processes, []),
+        _safe(list_applications, []),
+        _safe(list_sessions, "（会话列表获取失败）"),
+    )
+
+
 def create_app():
     """创建 Gradio 应用"""
-    with gr.Blocks(
-        title="FridaMCP - Android Frida 动态分析平台",
-        theme=gr.themes.Soft(),
-        css="""
-        .header { text-align: center; margin-bottom: 20px; }
-        .status-box { padding: 10px; border-radius: 8px; }
-        """
-    ) as app:
+    _blocks_kwargs = dict(title="FridaMCP - Android Frida 动态分析平台")
+    if _GRADIO_MAJOR < 6:
+        # gradio 4.x / 5.x: theme 与 css 属于 Blocks 构造器
+        _blocks_kwargs.update(theme=GUI_THEME, css=GUI_CSS)
 
-        # ===== 标题栏 =====
+    with gr.Blocks(**_blocks_kwargs) as app:
+
+        # ===== 标题栏（含 PWA 元数据）=====
+        # meta 放在 body 顶部，Chrome/Safari 仍会解析；
+        # manifest/icons 由 main() 中注册的 FastAPI 路由提供
         gr.HTML("""
+        <meta name="theme-color" content="#2563eb">
+        <meta name="mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+        <meta name="apple-mobile-web-app-title" content="FridaMCP">
+        <link rel="manifest" href="/manifest.webmanifest">
+        <link rel="apple-touch-icon" href="/icon-180.png">
+        <link rel="icon" type="image/png" href="/icon-192.png">
         <div class="header">
             <h1>🔧 FridaMCP - Android Frida 动态分析平台</h1>
             <p>AI-Powered Frida MCP Server | 端口 8768 | GUI 端口 7860</p>
@@ -597,22 +677,22 @@ def create_app():
             # ===== Tab 1: 仪表盘 =====
             with gr.Tab("📊 仪表盘"):
                 with gr.Row():
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### MCP 服务器")
-                        mcp_status_display = gr.Textbox(label="MCP 状态", value=get_mcp_status(), interactive=False)
+                        mcp_status_display = gr.Textbox(label="MCP 状态", value="MCP 服务器未运行", interactive=False)
                         with gr.Row():
                             btn_start_mcp = gr.Button("启动 MCP", variant="primary")
                             btn_stop_mcp = gr.Button("停止 MCP", variant="stop")
                         mcp_result = gr.Textbox(label="操作结果", interactive=False)
 
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### 设备状态")
-                        device_status_display = gr.JSON(label="设备状态", value=get_device_status)
+                        device_status_display = gr.JSON(label="设备状态")
                         btn_refresh_status = gr.Button("刷新状态")
 
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### 会话状态")
-                        session_status_display = gr.JSON(label="会话状态", value=session_manager.get_status)
+                        session_status_display = gr.JSON(label="会话状态")
                         btn_refresh_session = gr.Button("刷新会话")
 
                 with gr.Row():
@@ -632,7 +712,7 @@ def create_app():
             # ===== Tab 2: 设备 & 进程 =====
             with gr.Tab("📱 设备 & 进程"):
                 with gr.Row():
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### 设备管理")
                         device_count = gr.Textbox(label="设备数量", interactive=False)
                         device_dropdown = gr.Dropdown(label="选择设备", choices=[])
@@ -643,13 +723,12 @@ def create_app():
                             btn_reconnect_dev = gr.Button("重连")
                         device_info = gr.Textbox(label="设备信息", lines=8, interactive=False)
 
-                    with gr.Column(scale=2):
+                    with gr.Column(scale=2, min_width=380):
                         gr.Markdown("### 进程管理")
                         with gr.Tab("进程列表"):
                             process_df = gr.Dataframe(
                                 headers=["pid", "name"],
                                 label="进程列表（前200个）",
-                                value=list_processes,
                                 interactive=False,
                             )
                             btn_refresh_proc = gr.Button("刷新进程")
@@ -691,13 +770,13 @@ def create_app():
             # ===== Tab 3: 会话管理 =====
             with gr.Tab("🔗 会话管理"):
                 with gr.Row():
-                    with gr.Column(scale=2):
-                        session_display = gr.Textbox(label="活跃会话", lines=12, interactive=False, value=list_sessions)
+                    with gr.Column(scale=2, min_width=380):
+                        session_display = gr.Textbox(label="活跃会话", lines=12, interactive=False, value="（页面加载后自动刷新）")
                         with gr.Row():
                             btn_refresh_sessions = gr.Button("刷新")
                             btn_close_all_sess = gr.Button("关闭所有", variant="stop")
                         session_result = gr.Textbox(label="操作结果", interactive=False)
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### 关闭会话")
                         close_session_id = gr.Textbox(label="会话 ID", placeholder="sess_xxxx")
                         btn_close_session = gr.Button("关闭会话")
@@ -709,7 +788,7 @@ def create_app():
             # ===== Tab 4: Hook 管理 =====
             with gr.Tab("🎣 Hook 管理"):
                 with gr.Row():
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### Java 方法 Hook")
                         hook_session = gr.Textbox(label="会话 ID", placeholder="sess_xxxx")
                         hook_class = gr.Textbox(label="类名", placeholder="com.example.app.LoginActivity")
@@ -717,7 +796,7 @@ def create_app():
                         btn_hook_java = gr.Button("安装 Hook", variant="primary")
                         hook_result = gr.Textbox(label="结果", lines=3, interactive=False)
 
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### Native 函数 Hook")
                         native_module = gr.Textbox(label="模块名", placeholder="libnative.so")
                         native_func = gr.Textbox(label="函数名（可选）", placeholder="Java_com_example_NativeMethod")
@@ -726,7 +805,7 @@ def create_app():
                         native_result = gr.Textbox(label="结果", lines=3, interactive=False)
 
                 with gr.Row():
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### Hook 列表 & 管理")
                         hooks_display = gr.Textbox(label="已安装 Hook", lines=8, interactive=False)
                         with gr.Row():
@@ -734,7 +813,7 @@ def create_app():
                             unhook_id = gr.Textbox(label="Hook ID（留空移除全部）")
                             btn_unhook = gr.Button("移除 Hook", variant="stop")
 
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### Hook 消息")
                         hook_msgs = gr.Textbox(label="捕获消息", lines=12, interactive=False)
                         with gr.Row():
@@ -751,7 +830,7 @@ def create_app():
             # ===== Tab 5: 内存检查 =====
             with gr.Tab("🧠 内存检查"):
                 with gr.Row():
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### 模块列表")
                         mem_session = gr.Textbox(label="会话 ID", placeholder="sess_xxxx")
                         btn_list_modules = gr.Button("列出模块")
@@ -761,7 +840,7 @@ def create_app():
                             interactive=False,
                         )
 
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         gr.Markdown("### 内存搜索")
                         search_pattern = gr.Textbox(label="搜索模式", placeholder="password 或 48 65 6c 6c 6f")
                         search_max = gr.Slider(10, 500, value=100, label="最大结果数")
@@ -769,7 +848,7 @@ def create_app():
                         search_result = gr.Textbox(label="搜索结果", lines=8, interactive=False)
 
                 with gr.Row():
-                    with gr.Column():
+                    with gr.Column(min_width=380):
                         gr.Markdown("### 内存读取")
                         with gr.Row():
                             read_addr = gr.Textbox(label="地址", placeholder="0x12345678")
@@ -823,7 +902,7 @@ def create_app():
             with gr.Tab("💉 APK 注入器"):
                 gr.Markdown("### Frida-Gadget APK 注入（无需 Root）")
                 with gr.Row():
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         inject_input = gr.Textbox(label="输入 APK 路径", placeholder="/path/to/app.apk")
                         inject_output = gr.Textbox(label="输出 APK 路径（留空自动）", placeholder="/path/to/app_injected.apk")
                         inject_arch = gr.Textbox(label="架构（留空自动）", placeholder="arm64-v8a")
@@ -831,7 +910,7 @@ def create_app():
                         inject_app_class = gr.Textbox(label="Application 类名（可选）", placeholder="com.example.app.MyApplication")
                         btn_inject = gr.Button("开始注入", variant="primary")
 
-                    with gr.Column(scale=1):
+                    with gr.Column(scale=1, min_width=380):
                         inject_result = gr.Textbox(label="注入结果", lines=10, interactive=False)
                         gr.Markdown("""
                         ### 使用说明
@@ -882,12 +961,66 @@ def create_app():
                 - **stdio 模式**: `python -m fridamcp.server --transport stdio`
                 """)
 
+        # ===== 页面加载时刷新状态 =====
+        # 旧实现把 value=callable 写在组件上：构建 Blocks 时同步执行，
+        # 无设备场景下 device_manager 5 次重试(~10s+) 阻塞服务器启动；
+        # 且只在启动时求值一次，手机上打开页面看到的永远是陈旧快照。
+        # app.load() 在每次打开/刷新页面时触发，服务器秒级启动。
+        app.load(
+            fn=refresh_all_status,
+            outputs=[
+                mcp_status_display,
+                device_status_display,
+                session_status_display,
+                process_df,
+                app_df,
+                session_display,
+            ],
+        )
+
     return app
 
 
 # ============================================================
 # 主入口
 # ============================================================
+
+def _register_pwa_routes(app):
+    """向 Gradio 底层 FastAPI 注册 PWA 静态资源路由
+
+    提供 /manifest.webmanifest 与 /icon-*.png，
+    使 GUI 可以被浏览器"添加到主屏幕"并以独立 App 形式全屏运行。
+    launch() 返回 FastAPI 实例（gradio>=4.0）；异常时静默降级，
+    不影响 GUI 本身。
+    """
+    try:
+        from fastapi.responses import FileResponse
+    except ImportError:
+        logger.warning("fastapi not available, PWA routes skipped")
+        return
+
+    static_dir = os.path.join(PROJECT_ROOT, "static")
+    manifest_path = os.path.join(static_dir, "manifest.json")
+    if not os.path.isfile(manifest_path):
+        logger.warning("static/manifest.json missing, PWA routes skipped")
+        return
+
+    @app.get("/manifest.webmanifest", include_in_schema=False)
+    async def _manifest():
+        return FileResponse(manifest_path, media_type="application/manifest+json")
+
+    for size in (512, 192, 180):
+        icon = os.path.join(static_dir, f"icon-{size}.png")
+
+        def _icon(icon_path=icon):
+            return FileResponse(icon_path, media_type="image/png")
+
+        app.add_api_route(
+            f"/icon-{size}.png", _icon, methods=["GET"], include_in_schema=False
+        )
+
+    logger.info("PWA routes registered (manifest + icons)")
+
 
 def main():
     """主入口"""
@@ -917,6 +1050,10 @@ def main():
         choices=["usb", "remote", "local"],
         help="Frida 设备类型（默认 usb）",
     )
+    parser.add_argument(
+        "--no-browser", action="store_true",
+        help="不自动打开浏览器（无头/Termux 环境推荐）",
+    )
 
     args = parser.parse_args()
 
@@ -930,6 +1067,8 @@ def main():
     logger.info("FridaMCP GUI - Android Frida 动态分析平台")
     logger.info("=" * 60)
     logger.info(f"GUI: http://0.0.0.0:{args.port}")
+    logger.info("移动端: 用手机浏览器打开上述地址（同局域网 IP），")
+    logger.info("        并选择\"添加到主屏幕\"即可获得 App 式全屏体验")
     if args.mcp:
         logger.info(f"MCP: http://0.0.0.0:{args.mcp_port}")
     logger.info("=" * 60)
@@ -939,13 +1078,33 @@ def main():
         start_mcp_server_background(port=args.mcp_port)
 
     # 启动 GUI
+    # prevent_thread_lock=True: 先拿到 launch() 返回的 FastAPI app 注册
+    # PWA 路由，再手动 block_thread() 保持进程运行
+    # （否则默认阻塞模式下 launch 之后的代码永远不会执行）
     app = create_app()
-    app.launch(
+    _launch_kwargs = dict(
         server_name=args.host,
         server_port=args.port,
         share=False,
-        inbrowser=True,
+        inbrowser=not args.no_browser,
+        favicon_path=os.path.join(PROJECT_ROOT, "static", "icon-192.png"),
+        prevent_thread_lock=True,
     )
+    if _GRADIO_MAJOR >= 6:
+        # gradio 6+: theme 与 css 从 Blocks 构造器移到了 launch()
+        _launch_kwargs.update(theme=GUI_THEME, css=GUI_CSS)
+    launch_result = app.launch(**_launch_kwargs)
+
+    # launch() 在 gradio>=4 中返回 (fastapi_app, local_url, share_url)
+    fastapi_app = launch_result[0] if isinstance(launch_result, tuple) else None
+    if fastapi_app is not None:
+        _register_pwa_routes(fastapi_app)
+
+    # 阻塞主线程直至服务器停止（等价于默认 launch 行为）
+    try:
+        app.block_thread()
+    except (KeyboardInterrupt, OSError):
+        logger.info("GUI stopped by user")
 
 
 if __name__ == "__main__":
