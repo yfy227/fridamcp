@@ -57,6 +57,9 @@ class AppViewModelTest {
         var navigated = false
         vm.connect("http://x:8770") { navigated = true }
 
+        // UnconfinedTestDispatcher 穿不透 withContext(IO)——等终态
+        awaitTerminal(vm) { v -> v.connected.value || v.lastError.value != null }
+
         assertTrue(vm.connected.value)
         assertNotNull(vm.statusJson.value)
         assertEquals("port 8768", vm.statusJson.value!!.getString("mcp"))
@@ -80,9 +83,13 @@ class AppViewModelTest {
         )
         vm.connect(serverUrl) {}
 
+        // connect 的网络 IO 在真实 Dispatchers.IO 线程池执行，
+        // 测试线程需等待其完成（等待终态而非赌调度时序）
+        awaitTerminal(vm) { v -> v.lastError.value != null || v.connected.value }
+
         assertFalse(vm.connected.value)
         assertNotNull(vm.lastError.value)
-        assertTrue(vm.lastError.value!!.contains("503"))
+        assertTrue("lastError=${vm.lastError.value}", vm.lastError.value!!.contains("503"))
         server.shutdown()
     }
 
@@ -91,5 +98,22 @@ class AppViewModelTest {
         val vm = AppViewModel()
         assertEquals("http://127.0.0.1:8770", vm.rest.getBaseUrl())
         assertEquals(vm.rest.getBaseUrl(), vm.baseUrl.value)
+    }
+
+    /** 等待 VM 到达终态（带 5s 超时，10ms 轮询） */
+    private fun awaitTerminal(
+        vm: AppViewModel,
+        terminal: (AppViewModel) -> Boolean,
+    ) {
+        val deadline = System.currentTimeMillis() + 5000
+        while (!terminal(vm)) {
+            if (System.currentTimeMillis() > deadline) {
+                throw AssertionError(
+                    "VM did not reach terminal state in 5s: " +
+                        "connected=${vm.connected.value} lastError=${vm.lastError.value}"
+                )
+            }
+            Thread.sleep(10)
+        }
     }
 }
