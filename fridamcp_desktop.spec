@@ -26,12 +26,41 @@ datas = [("static", "static")]  # PWA manifest + 图标
 binaries = []
 hiddenimports = []
 
-# Gradio 运行时需要完整的前端静态资源与动态导入
-for pkg in ("gradio", "gradio_client"):
+# Gradio 生态运行时需要完整的前端静态资源与动态导入。
+# gradio 6 生态有一批包运行时读取包内数据文件（safehttpx/groovy/
+# pypdfium2/rfc3987_syntax 的 version.txt 与 .lark 语法文件——
+# 缺失时 FileNotFoundError），全部 collect_all 覆盖。
+for pkg in ("gradio", "gradio_client", "mcp",
+            "safehttpx", "groovy", "pypdfium2", "pypdfium2_raw",
+            "rfc3987_syntax", "lark", "certifi"):
     pkg_datas, pkg_bins, pkg_hidden = collect_all(pkg)
     datas += pkg_datas
     binaries += pkg_bins
     hiddenimports += pkg_hidden
+
+# 预防性数据文件收集（只收数据不收整模块，控制体积）
+for pkg in ("fastmcp", "branca", "choreographer"):
+    try:
+        datas += collect_data_files(pkg)
+    except Exception:
+        pass
+
+# Gradio Dataframe 组件 postprocess 无条件 import pandas
+# （顶层是可选依赖，静态分析会树摇掉）——显式收集。
+# pandas._libs 的 C 扩展（pandas_parser 等）需显式声明给
+# FrozenImporter 索引，否则运行时 ModuleNotFoundError。
+for pkg in ("pandas", "numpy"):
+    pkg_datas, pkg_bins, pkg_hidden = collect_all(pkg)
+    datas += pkg_datas
+    binaries += pkg_bins
+    hiddenimports += pkg_hidden
+
+hiddenimports += collect_submodules("pandas._libs")
+hiddenimports += [
+    "pandas._libs.pandas_parser",
+    "pandas._libs.pandas_writer",
+    "pandas._libs.tslibs.parsing",
+]
 
 # 项目自身的包（防止动态导入被树摇掉）
 hiddenimports += collect_submodules("fridamcp")
@@ -57,7 +86,7 @@ a = Analysis(
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    excludes=["tkinter", "matplotlib", "pandas", "IPython"],
+    excludes=["tkinter", "matplotlib", "IPython"],
     cipher=block_cipher,
     noarchive=False,
 )
