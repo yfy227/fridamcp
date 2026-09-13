@@ -1012,6 +1012,14 @@ def main():
         "--no-browser", action="store_true",
         help="不自动打开浏览器（无头/Termux 环境推荐）",
     )
+    parser.add_argument(
+        "--no-rest", action="store_true",
+        help="不启动 REST API（默认启动，供 Android 原生 App 连接，端口 8770）",
+    )
+    parser.add_argument(
+        "--rest-port", type=int, default=8770,
+        help="REST API 端口（默认 8770）",
+    )
 
     args = parser.parse_args()
 
@@ -1029,7 +1037,14 @@ def main():
     logger.info("        并选择\"添加到主屏幕\"即可获得 App 式全屏体验")
     if args.mcp:
         logger.info(f"MCP: http://0.0.0.0:{args.mcp_port}")
+    if not args.no_rest:
+        logger.info(f"REST: http://0.0.0.0:{args.rest_port}（Android App 连此端口）")
     logger.info("=" * 60)
+
+    # REST API（供 Android 原生 App）
+    if not args.no_rest:
+        from fridamcp.rest_api import start_rest_background
+        start_rest_background(port=args.rest_port)
 
     # 如果需要，启动 MCP 服务器
     if args.mcp:

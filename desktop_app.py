@@ -45,11 +45,18 @@ def run_desktop(
     start_mcp: bool = True,
     mcp_port: int = 8768,
     device_type: str = "usb",
+    start_rest: bool = True,
+    rest_port: int = 8770,
 ) -> int:
     """以独立应用形态运行 FridaMCP，返回进程退出码"""
 
     os.environ["FRIDA_DEVICE_TYPE"] = device_type
     gui_app.setup_logging()
+
+    # ---- REST API（供 Android 原生 App 连接）----
+    if start_rest:
+        from fridamcp.rest_api import start_rest_background
+        start_rest_background(port=rest_port)
 
     # ---- 内部启动 MCP 服务器（独立应用默认全功能）----
     if start_mcp:

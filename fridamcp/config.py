@@ -25,6 +25,14 @@ class Config:
     # MCP 服务器路径
     MCP_PATH: str = "/mcp"
 
+    # ===== REST API 配置（供 Android 原生 App 等客户端） =====
+    REST_HOST: str = field(
+        default_factory=lambda: os.getenv("FRIDAMCP_REST_HOST", "0.0.0.0")
+    )
+    REST_PORT: int = field(
+        default_factory=lambda: int(os.getenv("FRIDAMCP_REST_PORT", "8770"))
+    )
+
     # ===== GUI 配置 =====
     GUI_HOST: str = field(
         default_factory=lambda: os.getenv("FRIDAMCP_GUI_HOST", "0.0.0.0")

@@ -79,6 +79,23 @@ python desktop_app.py                  # 或 pip install 后: fridamcp-desktop
 - 刘海屏安全区（safe-area）适配
 - 无头/Termux 环境用 `python app.py --no-browser` 跳过自动开浏览器
 
+### 🤖 Android 原生 App（Kotlin + Compose）
+
+真正的原生应用（`android-app/`），Material 3 深色主题，直连 fridamcp REST API：
+
+```bash
+# 获取 APK：GitHub Actions 自动构建（Actions → Android Build → Artifacts）
+# 或本地构建：cd android-app && gradle assembleDebug
+```
+
+功能：服务器连接配置 / 仪表盘（5s 自动刷新）/ 进程 & 应用管理
+（spawn / attach / kill）/ 会话管理 / Java & Native Hook / 消息流。
+
+**配套服务端**：REST API（`fridamcp/rest_api.py`，默认端口 8770）随
+`python app.py` / `desktop_app.py` 自动启动（`--no-rest` 关闭）。
+App 默认连 `http://127.0.0.1:8770`（Termux 本机场景），
+连接页可改为局域网任意主机的地址。
+
 ### 功能面板
 
 | 面板 | 功能 |

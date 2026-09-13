@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 白色 "FM" 简化图形：两根竖笔 + 横笔 -->
+    <path
+        android:pathData="M34,36 L34,72 M34,36 L50,36 L54,46 L58,36 L60,36 M60,36 L60,72"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:fillColor="#00000000" />
+    <!-- 橙色圆点 -->
+    <path
+        android:pathData="M70,64 m0,-5 a5,5 0 1,1 0,10 a5,5 0 1,1 0,-10"
+        android:fillColor="#FF842E" />
+</vector>
