@@ -83,11 +83,28 @@ jobs:
           target: default
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: |
-            adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk 2>/dev/null || \
-              (cd android-app && gradle assembleDebug --no-daemon && adb install -r app/build/outputs/apk/debug/app-debug.apk)
-            adb shell am start -n com.yfy227.fridamcp/.MainActivity
-            sleep 5
+            set -e
+            cd android-app
+            gradle assembleDebug --no-daemon --stacktrace
+            adb install -r app/build/outputs/apk/debug/app-debug.apk
+            adb logcat -c
+            adb shell am start -W -n com.yfy227.fridamcp/.MainActivity
+            sleep 6
+            # 崩溃检测：主进程必须存活
+            adb shell pidof com.yfy227.fridamcp || (echo "PROC_DEAD"; adb logcat -d | tail -80; exit 1)
             adb shell uiautomator dump /sdcard/ui.xml
             adb pull /sdcard/ui.xml emulator-ui.xml
-            grep -q "FridaMCP" emulator-ui.xml && echo "UI_LAUNCH_OK"
+            grep -q "FridaMCP" emulator-ui.xml || { echo "UI_LAUNCH_FAILED"; cat emulator-ui.xml | head -5; exit 1; }
+            echo "UI_LAUNCH_OK"
             adb exec-out screencap -p > emulator-screen.png
+
+      - name: Upload E2E evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: emulator-e2e-evidence
+          path: |
+            emulator-ui.xml
+            emulator-screen.png
+          retention-days: 14
+          if-no-files-found: ignore
