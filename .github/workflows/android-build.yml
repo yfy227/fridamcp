@@ -78,8 +78,10 @@ jobs:
       - name: Run emulator tests
         uses: reactivecircus/android-emulator-runner@v2
         with:
+          # macos-latest = ARM64 (M1)：必须用 arm64-v8a 镜像，
+          # x86_64 镜像在 M1 上无法启动（adb 持续 exit 1）
           api-level: 34
-          arch: x86_64
+          arch: arm64-v8a
           target: default
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: |
